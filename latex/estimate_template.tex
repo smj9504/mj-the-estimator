@@ -1,0 +1,36 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{times}
+\usepackage{geometry}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\geometry{a4paper, margin=1in}
+
+\begin{document}
+\begin{center}
+    \textbf{Reconstruction 견적서}
+\end{center}
+
+\section*{고객 정보}
+\begin{tabularx}{\textwidth}{l X}
+    \toprule
+    항목 & 내용 \\
+    \midrule
+    고객명 & \textbf{[고객명]} \\
+    프로젝트 & \textbf{[프로젝트명]} \\
+    \bottomrule
+\end{tabularx}
+
+\section*{견적 내역}
+\begin{tabularx}{\textwidth}{l X l}
+    \toprule
+    단계 & 세부사항 & 결과 \\
+    \midrule
+    작업 범위 & [Scope 입력] & [AI 출력] \\
+    치수 & [Measurement 입력] & [AI 출력] \\
+    자재 & [Material 입력] & [AI 출력] \\
+    현장 상태 & [Status 입력] & [AI 출력] \\
+    \bottomrule
+\end{tabularx}
+
+\end{document}
