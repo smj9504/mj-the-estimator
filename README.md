@@ -11,6 +11,34 @@ cd frontend
 npm run dev
 ```
 
+## ollama
+1. 개발 환경 (Ollama):
+  # Ollama 설치 후
+  ollama pull llama3
+  ollama serve
+
+  # 백엔드 실행
+  cd backend
+  python -m uvicorn main:app --reload --port 8000
+
+  2. 프로덕션 환경 (OpenAI):
+  # 환경 변수 설정
+  export ENVIRONMENT=production
+  export OPENAI_API_KEY=your_api_key_here
+
+  # 백엔드 실행
+  python -m uvicorn main:app --reload --port 8000
+
+  3. Claude 사용:
+  export ENVIRONMENT=production
+  export ANTHROPIC_API_KEY=your_claude_api_key_here
+
+  자동 선택 순서:
+
+  1. ENVIRONMENT=production → OpenAI/Claude API 사용
+  2. Ollama 서버 감지 → Ollama 사용
+  3. 둘 다 없음 → Mock 데이터 사용
+
 
 이 프로그램은 **Reconstruction 견적** 기능을 핵심으로 하며, 여러 단계의 작업(예: work scope, measurement, material type, current status)에 대해 내장 프롬프트를 활용해 AI가 처리하고, 사용자 확인(컨펌)을 거쳐 다음 단계로 진행합니다. 최종 출력은 **PDF 파일**로 생성되며, 추후 **프로젝트 관리**와 **인보이스 관리** 기능을 추가할 수 있도록 확장성을 고려합니다. 기존 스택(React + FastAPI + LangChain + Grok 3/Llama 3 + Pinecone + Google Cloud Vision API + PostgreSQL)을 기반으로 하되, PDF 생성과 단계별 워크플로우에 맞게 조정합니다. 보안은 낮은 우선순위이고, 비용은 성능 우선이지만 무료 티어를 활용해 합리적으로 관리합니다.
 

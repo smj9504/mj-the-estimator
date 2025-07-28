@@ -1,32 +1,57 @@
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 import sqlite3
 from google.cloud import vision
 import os
+import logging
+from config import settings
 
-app = FastAPI()
-llm = OllamaLLM(model="llama3")
-# Vision client는 OCR 사용 시에만 초기화
+# Import routers
+from routers.pre_estimate import router as pre_estimate_router
+from models.database import init_database
 
-# SQLite 설정
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="MJ Estimator API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://localhost:5174", 
+        f"http://localhost:{settings.port}"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize database
+init_database()
+
+# Include routers
+app.include_router(pre_estimate_router)
+
+# Legacy code (keeping for backward compatibility)
+try:
+    environment = os.getenv('ENVIRONMENT', 'development')
+    if environment == 'production' and os.getenv('OPENAI_API_KEY'):
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(model="gpt-3.5-turbo", api_key=os.getenv('OPENAI_API_KEY'))
+    else:
+        llm = OllamaLLM(model="llama3")
+except Exception as e:
+    logger.error(f"Failed to initialize legacy LLM: {e}")
+    llm = None
+
+# Legacy SQLite connection (for existing endpoints)
 conn = sqlite3.connect("db/estimate.db")
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS estimates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    step TEXT,
-    input TEXT,
-    output TEXT,
-    confirmed BOOLEAN
-)''')
-c.execute('''CREATE TABLE IF NOT EXISTS prompts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    step TEXT,
-    template TEXT
-)''')
-c.execute("INSERT OR IGNORE INTO prompts (step, template) VALUES (?, ?)",
-          ("work_scope", "작업 범위: {scope}\n주요 작업 항목을 나열하고 간단히 설명해:"))
-conn.commit()
 
 # 내장 프롬프트
 scope_prompt = PromptTemplate(
@@ -36,7 +61,10 @@ scope_prompt = PromptTemplate(
 
 @app.post("/step1-work-scope")
 async def step1_work_scope(scope: str = Form(...)):
-    output = llm(scope_prompt.format(scope=scope))
+    if llm:
+        output = llm.invoke(scope_prompt.format(scope=scope))
+    else:
+        output = f"Mock response for scope: {scope}"
     c.execute("INSERT INTO estimates (step, input, output, confirmed) VALUES (?, ?, ?, ?)",
               ("work_scope", scope, output, False))
     conn.commit()
