@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import api from '../../utils/api';
+import logger from '../../utils/logger';
 
 const MeasurementData = ({ data, onNext, onPrevious }) => {
   const [file, setFile] = useState(null);
@@ -12,36 +14,47 @@ const MeasurementData = ({ data, onNext, onPrevious }) => {
     if (selectedFile) {
       setFile(selectedFile);
       setError(null);
+      logger.userAction('File selected', 'file-upload', {
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type,
+        uploadType
+      });
     }
   };
 
   const handleProcess = async () => {
     if (!file) {
       setError('Please select a file to upload');
+      logger.warn('Process attempted without file selection');
       return;
     }
 
     setIsProcessing(true);
     setError(null);
+    logger.info('Starting file processing', { fileName: file.name, uploadType });
 
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('file_type', uploadType);
 
-      const response = await fetch('/api/pre-estimate/measurement', {
-        method: 'POST',
-        body: formData,
+      const result = await api.post('/api/pre-estimate/measurement', formData, {
+        timeout: 120000 // 2 minutes timeout for file processing
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to process file');
-      }
-
-      const result = await response.json();
-      setParsedData(result.data);
+      
+      setParsedData(result.data.data);
+      logger.info('File processed successfully', { 
+        fileName: file.name,
+        measurementCount: result.data.data?.measurements?.length || 0
+      });
     } catch (err) {
       setError(err.message);
+      logger.error('File processing failed', {
+        fileName: file.name,
+        uploadType,
+        error: err.message
+      });
       // Mock data for testing
       const mockData = {
         measurements: [

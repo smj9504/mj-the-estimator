@@ -5,18 +5,21 @@ from langchain.prompts import PromptTemplate
 import sqlite3
 from google.cloud import vision
 import os
-import logging
 from config import settings
 
 # Import routers
 from routers.pre_estimate import router as pre_estimate_router
 from models.database import init_database
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Import our custom logger
+from utils.logger import logger
+from middleware.logging_middleware import LoggingRoute, log_request_body
 
-app = FastAPI(title="MJ Estimator API", version="1.0.0")
+app = FastAPI(
+    title="MJ Estimator API", 
+    version="1.0.0",
+    route_class=LoggingRoute  # Use custom route class for automatic logging
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -31,11 +34,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add logging middleware
+app.middleware("http")(log_request_body)
+
 # Initialize database
 init_database()
 
 # Include routers
 app.include_router(pre_estimate_router)
+
+# Startup and shutdown events
+@app.on_event("startup")
+async def startup_event():
+    logger.info("MJ The Estimator API starting up", 
+                host=settings.host, 
+                port=settings.port,
+                environment=settings.environment)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("MJ The Estimator API shutting down")
 
 # Legacy code (keeping for backward compatibility)
 try:
@@ -44,7 +62,7 @@ try:
         from langchain_openai import ChatOpenAI
         llm = ChatOpenAI(model="gpt-3.5-turbo", api_key=os.getenv('OPENAI_API_KEY'))
     else:
-        llm = OllamaLLM(model="llama3")
+        llm = OllamaLLM(model="gemma3")
 except Exception as e:
     logger.error(f"Failed to initialize legacy LLM: {e}")
     llm = None

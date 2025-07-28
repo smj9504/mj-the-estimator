@@ -80,6 +80,13 @@ async def process_measurement_data(
     file_type: str = Form(...)
 ):
     """Process measurement data from uploaded file"""
+    from utils.logger import logger
+    
+    logger.info(f"Processing measurement file: {file.filename}", 
+                file_name=file.filename, 
+                file_type=file_type,
+                session_id=session_id)
+    
     try:
         # Create session if not provided
         if not session_id:
@@ -88,22 +95,31 @@ async def process_measurement_data(
         
         # Read file content
         file_content = await file.read()
+        logger.info(f"File read successfully, size: {len(file_content)} bytes")
         
         # Save uploaded file
         saved_path = file_service.save_uploaded_file(file_content, file.filename)
+        logger.info(f"File saved to: {saved_path}")
         
         # Process based on file type
         if file_type.lower() == 'image':
+            logger.info("Processing image with OCR")
             # Use OCR to extract text
             raw_data = ocr_service.extract_text_from_image(file_content)
         elif file_type.lower() == 'csv':
+            logger.info("Processing CSV file")
             # Process CSV content
             raw_data = file_service.process_csv_content(file_content)
         else:
+            logger.error(f"Unsupported file type: {file_type}")
             raise HTTPException(status_code=400, detail="Unsupported file type")
         
-        # Parse with AI
+        logger.info(f"Raw data extracted, length: {len(raw_data)} characters")
+        
+        # Parse with AI (with timeout protection)
+        logger.info("Starting AI parsing")
         parsed_data = ai_service.parse_measurement_data(raw_data)
+        logger.info("AI parsing completed successfully")
         
         # Save to database
         insert_id = execute_insert(

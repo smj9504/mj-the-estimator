@@ -27,14 +27,22 @@ class FileService:
             # Try to decode as UTF-8 first
             csv_text = csv_content.decode('utf-8')
             
-            # Parse CSV to get structured data
-            df = pd.read_csv(StringIO(csv_text))
-            
-            # Convert to readable text format
+            # For complex multi-section CSV files, process as text
+            lines = csv_text.strip().split('\n')
             result = []
-            for index, row in df.iterrows():
-                row_text = ", ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                result.append(f"Row {index + 1}: {row_text}")
+            current_section = None
+            
+            for line in lines:
+                if not line.strip():
+                    result.append("")  # Keep empty lines for section separation
+                    continue
+                
+                # Check if this is a section header (all uppercase or specific patterns)
+                if line.strip().isupper() or line.startswith('PLAN ATTRIBUTES') or line.startswith('FLOOR ATTRIBUTES') or line.startswith('ROOM ATTRIBUTES') or line.startswith('WALL ATTRIBUTES'):
+                    current_section = line.strip()
+                    result.append(f"\n[Section: {current_section}]")
+                else:
+                    result.append(line.strip())
             
             return "\n".join(result)
             
@@ -43,11 +51,22 @@ class FileService:
             for encoding in ['latin-1', 'cp1252']:
                 try:
                     csv_text = csv_content.decode(encoding)
-                    df = pd.read_csv(StringIO(csv_text))
+                    # Use the same text processing for other encodings
+                    lines = csv_text.strip().split('\n')
                     result = []
-                    for index, row in df.iterrows():
-                        row_text = ", ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                        result.append(f"Row {index + 1}: {row_text}")
+                    current_section = None
+                    
+                    for line in lines:
+                        if not line.strip():
+                            result.append("")
+                            continue
+                        
+                        if line.strip().isupper() or line.startswith('PLAN ATTRIBUTES') or line.startswith('FLOOR ATTRIBUTES') or line.startswith('ROOM ATTRIBUTES') or line.startswith('WALL ATTRIBUTES'):
+                            current_section = line.strip()
+                            result.append(f"\n[Section: {current_section}]")
+                        else:
+                            result.append(line.strip())
+                    
                     return "\n".join(result)
                 except:
                     continue

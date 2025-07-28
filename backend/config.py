@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     
     # Ollama Configuration
     ollama_host: str = "http://localhost:11434"
-    ollama_model: str = "llama3"
+    ollama_model: str = "gemma3"
     
     # OpenAI Configuration
     openai_api_key: Optional[str] = None
