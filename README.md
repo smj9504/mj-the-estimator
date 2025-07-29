@@ -1,15 +1,74 @@
 
-## 백엔드 실행
-```
-cd backend
-uvicorn main:app --reload
+# MJ The Estimator
+
+Construction estimation tool with AI-powered measurement processing and opening verification.
+
+## 🚀 Quick Start
+
+### Option 1: Using npm scripts (Recommended)
+```bash
+# Install dependencies
+npm run install:all
+
+# Start both servers concurrently
+npm run dev
+
+# Or start individually
+npm run dev:backend
+npm run dev:frontend
 ```
 
-## 프론트 실행
+### Option 2: Using batch scripts
+```bash
+# Start both servers
+scripts\dev-start.bat
+
+# Or start individually
+scripts\backend-dev.bat
+scripts\frontend-dev.bat
+
+# Stop all servers
+scripts\dev-stop.bat
 ```
+
+### Option 3: Manual start
+```bash
+# Backend
+cd backend
+call venv\Scripts\activate
+uvicorn main:app --reload --port 8001
+
+# Frontend (in new terminal)
 cd frontend
 npm run dev
 ```
+
+## 📁 Project Structure
+
+```
+mj-the-estimator/
+├── scripts/              # Development scripts
+│   ├── backend-dev.bat
+│   ├── frontend-dev.bat
+│   ├── dev-start.bat
+│   └── dev-stop.bat
+├── backend/              # FastAPI backend
+├── frontend/             # React frontend
+├── package.json          # Root package.json with scripts
+└── README.md
+```
+
+## 🔥 Hot Reloading
+
+Both frontend and backend support hot reloading:
+- **Backend**: Auto-restarts on Python file changes
+- **Frontend**: Hot Module Replacement (HMR) for instant updates
+
+## 📊 Access Points
+
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:8001
+- **API Docs**: http://localhost:8001/docs
 
 ## ollama
 1. 개발 환경 (Ollama):

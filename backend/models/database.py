@@ -32,7 +32,8 @@ def init_database():
             session_id TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'in_progress'
+            status TEXT DEFAULT 'in_progress',
+            project_name TEXT
         )''')
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS measurement_data (

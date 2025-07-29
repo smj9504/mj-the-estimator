@@ -8,7 +8,7 @@ from models.database import execute_insert, execute_query, execute_update
 from models.schemas import (
     MeasurementDataResponse, DemoScopeRequest, DemoScopeResponse,
     WorkScopeRequest, WorkScopeResponse, PreEstimateSessionResponse,
-    CompletePreEstimateResponse
+    CompletePreEstimateResponse, RoomOpeningUpdate, RoomOpeningResponse
 )
 from services.ai_service import ai_service
 from services.ocr_service import ocr_service
@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pre-estimate", tags=["pre-estimate"])
 
 @router.post("/session", response_model=PreEstimateSessionResponse)
-async def create_session():
+async def create_session(project_name: Optional[str] = None):
     """Create a new pre-estimate session"""
     session_id = str(uuid.uuid4())
     
     try:
         insert_id = execute_insert(
-            "INSERT INTO pre_estimate_sessions (session_id, status) VALUES (?, ?)",
-            (session_id, "in_progress")
+            "INSERT INTO pre_estimate_sessions (session_id, status, project_name) VALUES (?, ?, ?)",
+            (session_id, "in_progress", project_name)
         )
         
         # Fetch the created session
@@ -118,7 +118,7 @@ async def process_measurement_data(
         
         # Parse with AI (with timeout protection)
         logger.info("Starting AI parsing")
-        parsed_data = ai_service.parse_measurement_data(raw_data)
+        parsed_data = ai_service.parse_measurement_data(raw_data, file_type)
         logger.info("AI parsing completed successfully")
         
         # Save to database
@@ -276,3 +276,109 @@ async def get_complete_data(session_id: str):
     except Exception as e:
         logger.error(f"Error getting complete data: {e}")
         raise HTTPException(status_code=500, detail="Failed to get complete data")
+
+@router.put("/room-openings", response_model=RoomOpeningResponse)
+async def update_room_openings(request: RoomOpeningUpdate):
+    """Update openings for a specific room and recalculate measurements"""
+    try:
+        # Get current measurement data
+        measurements = execute_query(
+            "SELECT * FROM measurement_data WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (request.session_id,)
+        )
+        
+        if not measurements:
+            raise HTTPException(status_code=404, detail="No measurement data found for session")
+        
+        # Parse current data
+        current_data = json.loads(measurements[0]['parsed_json'])
+        
+        # Find and update the specific room
+        room_updated = False
+        for location in current_data:
+            if location.get('location') == request.location:
+                for room in location.get('rooms', []):
+                    if room.get('name') == request.room_name:
+                        # Update openings
+                        room['openings'] = [
+                            {
+                                "type": opening.type,
+                                "width": opening.width,
+                                "height": opening.height
+                            }
+                            for opening in request.openings
+                        ]
+                        
+                        # Recalculate measurements for this room
+                        from services.room_calculator import RoomCalculator
+                        
+                        # Create room data structure for recalculation
+                        # Try to get original dimensions or calculate from area
+                        floor_area = room['measurements'].get('floor_area_sqft', 100.0)
+                        height = room['measurements'].get('height', 8.0)
+                        
+                        # Try to get original dimensions or estimate from area
+                        original_length = room['measurements'].get('length')
+                        original_width = room['measurements'].get('width')
+                        
+                        if not original_length or not original_width:
+                            # Estimate dimensions from area (assume square room)
+                            original_length = (floor_area ** 0.5)
+                            original_width = (floor_area ** 0.5)
+                        
+                        room_data = {
+                            "name": room['name'],
+                            "raw_dimensions": {
+                                "length": float(original_length),
+                                "width": float(original_width),
+                                "height": float(height),
+                                "area": float(floor_area)
+                            },
+                            "openings": room['openings']
+                        }
+                        
+                        # Recalculate measurements
+                        updated_room = RoomCalculator.calculate_room_measurements(room_data)
+                        room['measurements'] = updated_room['measurements']
+                        
+                        room_updated = True
+                        break
+                
+                if room_updated:
+                    break
+        
+        if not room_updated:
+            raise HTTPException(status_code=404, detail=f"Room '{request.room_name}' not found in location '{request.location}'")
+        
+        # Save updated data back to database
+        execute_update(
+            "UPDATE measurement_data SET parsed_json = ? WHERE session_id = ? AND id = ?",
+            (json.dumps(current_data), request.session_id, measurements[0]['id'])
+        )
+        
+        # Return the updated room data
+        updated_room_data = None
+        for location in current_data:
+            if location.get('location') == request.location:
+                for room in location.get('rooms', []):
+                    if room.get('name') == request.room_name:
+                        updated_room_data = room
+                        break
+                if updated_room_data:
+                    break
+        
+        return RoomOpeningResponse(
+            session_id=request.session_id,
+            location=request.location,
+            room_name=request.room_name,
+            openings=request.openings,
+            updated_measurements=updated_room_data['measurements'] if updated_room_data else {}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating room openings: {e}", exc_info=True)
+        logger.error(f"Request data: session_id={request.session_id}, location={request.location}, room_name={request.room_name}")
+        logger.error(f"Openings: {request.openings}")
+        raise HTTPException(status_code=500, detail=f"Failed to update room openings: {str(e)}")

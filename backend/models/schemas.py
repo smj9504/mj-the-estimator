@@ -113,3 +113,22 @@ class Location(BaseModel):
 class WorkScopeParsed(BaseModel):
     default_scope: DefaultScope
     locations: List[Location]
+
+# Opening management schemas
+class Opening(BaseModel):
+    type: str  # 'door', 'window', 'open_wall'
+    width: float
+    height: float
+
+class RoomOpeningUpdate(BaseModel):
+    session_id: str
+    location: str  # floor/elevation
+    room_name: str
+    openings: List[Opening]
+
+class RoomOpeningResponse(BaseModel):
+    session_id: str
+    location: str
+    room_name: str
+    openings: List[Opening]
+    updated_measurements: Dict[str, Any]

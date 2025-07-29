@@ -11,8 +11,8 @@ class API {
     const method = options.method || 'GET';
     const startTime = performance.now();
     
-    // Set default timeout to 60 seconds
-    const timeout = options.timeout || 60000;
+    // Set default timeout to 3 minutes for file processing
+    const timeout = options.timeout || 180000;
     
     logger.info(`API Request: ${method} ${endpoint}`, {
       method,
@@ -127,6 +127,43 @@ class API {
 }
 
 // Create and export API instance
-const api = new API();
+const api = new API('http://localhost:8001');
+
+// Pre-estimate API functions
+export const createSession = (projectName = null) => {
+  const data = projectName ? { project_name: projectName } : {};
+  return api.post('/api/pre-estimate/session', data);
+};
+
+export const getSession = (sessionId) => {
+  return api.get(`/api/pre-estimate/session/${sessionId}`);
+};
+
+export const uploadMeasurementFile = (file, fileType, sessionId = null) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('file_type', fileType);
+  if (sessionId) {
+    formData.append('session_id', sessionId);
+  }
+  
+  return api.post('/api/pre-estimate/measurement', formData);
+};
+
+export const updateRoomOpenings = (data) => {
+  return api.put('/api/pre-estimate/room-openings', data);
+};
+
+export const processDemoScope = (data) => {
+  return api.post('/api/pre-estimate/demo-scope', data);
+};
+
+export const processWorkScope = (data) => {
+  return api.post('/api/pre-estimate/work-scope', data);
+};
+
+export const getCompleteData = (sessionId) => {
+  return api.get(`/api/pre-estimate/complete/${sessionId}`);
+};
 
 export default api;

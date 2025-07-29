@@ -1,4 +1,3 @@
 @echo off
-echo Starting backend and frontend...
-start cmd /k "backend-dev.bat"
-frontend-dev.bat
+echo Starting development servers...
+call "%~dp0scripts\dev-start.bat"

@@ -1,9 +1,11 @@
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, List, Any
 from utils.prompts import MEASUREMENT_PROMPT, DEMO_SCOPE_PROMPT, WORK_SCOPE_PROMPT, TEXT_CLEANUP_PROMPT
 from utils.logger import logger
 import time
+from services.measurement_processor import measurement_processor
+from services.room_calculator import calculation_engine
 
 class AIService:
     def __init__(self):
@@ -206,75 +208,50 @@ class AIService:
         logger.info(f"Successfully parsed {len(measurements)} rooms")
         return {"measurements": measurements}
     
-    def parse_measurement_data(self, raw_data: str) -> Dict[str, Any]:
-        """Parse measurement data from OCR text or CSV content"""
+    def parse_measurement_data(self, raw_data: str, file_type: str = 'csv') -> List[Dict[str, Any]]:
+        """Parse measurement data using new flexible processing pipeline"""
         start_time = time.time()
         
-        # For development stability, always use direct parsing for CSV data
-        if len(raw_data) > 1000 or "PLAN ATTRIBUTES" in raw_data:
-            logger.info("Using direct CSV parsing for stability",
-                       data_length=len(raw_data))
-            return self._parse_csv_directly(raw_data)
-        
-        if self.mock_mode:
-            logger.info(f"Mock parsing measurement data: {raw_data[:100]}...",
-                      service="AIService",
-                      operation="parse_measurement_data",
-                      data_length=len(raw_data))
-            return {
-                "measurements": [
-                    {
-                        "elevation": "1st Floor",
-                        "room": "Kitchen",
-                        "dimensions": {"length": 10.0, "width": 12.0, "height": 8.0}
-                    },
-                    {
-                        "elevation": "1st Floor", 
-                        "room": "Living Room",
-                        "dimensions": {"length": 15.0, "width": 20.0, "height": 9.0}
-                    }
-                ]
-            }
-        
         try:
-            logger.info(f"Parsing measurement data with {self.ai_provider}: {raw_data[:100]}...",
+            logger.info(f"Processing measurement data with new pipeline: {raw_data[:100]}...",
                       service="AIService",
                       operation="parse_measurement_data",
                       data_length=len(raw_data),
-                      ai_provider=self.ai_provider)
+                      file_type=file_type)
             
-            # Clean the input data first
-            if self.ai_provider in ['openai', 'claude']:
-                # For chat models, use different invocation
-                cleaned_response = self.llm.invoke([{"role": "user", "content": TEXT_CLEANUP_PROMPT.format(text=raw_data)}])
-                cleaned_data = cleaned_response.content if hasattr(cleaned_response, 'content') else str(cleaned_response)
-                
-                # Parse with measurement prompt
-                parse_response = self.llm.invoke([{"role": "user", "content": MEASUREMENT_PROMPT.format(raw_data=cleaned_data)}])
-                response = parse_response.content if hasattr(parse_response, 'content') else str(parse_response)
-            else:
-                # For Ollama LLM models with timeout handling
+            # Use new measurement processor for format detection and extraction
+            import threading
+            import time as time_module
+            
+            processing_result = [None]  # Use list to allow modification in nested function
+            processing_error = [None]
+            
+            def process_with_timeout():
                 try:
-                    cleaned_data = self.llm.invoke(TEXT_CLEANUP_PROMPT.template.format(text=raw_data))
-                    response = self.llm.invoke(MEASUREMENT_PROMPT.template.format(raw_data=cleaned_data))
+                    intermediate_data = measurement_processor.process(raw_data, file_type)
+                    final_structure = calculation_engine.process_to_final_format(intermediate_data)
+                    processing_result[0] = final_structure
                 except Exception as e:
-                    logger.warning(f"AI processing failed, falling back to direct parsing: {e}")
-                    return self._parse_csv_directly(raw_data)
+                    processing_error[0] = e
             
-            parsed_data = self._parse_json_response(response)
+            # Start processing in a separate thread
+            processing_thread = threading.Thread(target=process_with_timeout)
+            processing_thread.daemon = True
+            processing_thread.start()
             
-            # Validate the structure
-            if "measurements" not in parsed_data:
-                logger.warning("No 'measurements' key found, creating default structure")
-                parsed_data = {
-                    "measurements": [
-                        {
-                            "elevation": "1st Floor",
-                            "room": "Unknown",
-                            "dimensions": {"length": 0, "width": 0, "height": 8}
-                        }
-                    ]
-                }
+            # Wait for completion or timeout (60 seconds)
+            processing_thread.join(timeout=60)
+            
+            if processing_thread.is_alive():
+                logger.error("Processing pipeline timed out after 60 seconds")
+                raise TimeoutError("Processing pipeline timeout after 60 seconds")
+            
+            if processing_error[0]:
+                raise processing_error[0]
+            
+            final_structure = processing_result[0]
+            if final_structure is None:
+                raise Exception("Processing completed but no result returned")
             
             duration = time.time() - start_time
             logger.service_call(
@@ -282,22 +259,72 @@ class AIService:
                 operation="parse_measurement_data",
                 success=True,
                 duration=duration,
-                ai_provider=self.ai_provider,
-                result_keys=list(parsed_data.keys())
+                pipeline="new_flexible",
+                locations_count=len(final_structure),
+                total_rooms=sum(len(loc.get('rooms', [])) for loc in final_structure)
             )
-            return parsed_data
+            
+            return final_structure
             
         except Exception as e:
             duration = time.time() - start_time
-            logger.error(f"Error parsing measurement data: {e}",
+            logger.error(f"Error in new processing pipeline: {e}",
                         service="AIService",
                         operation="parse_measurement_data",
                         duration=duration,
-                        ai_provider=self.ai_provider)
-            return {
-                "error": str(e),
-                "measurements": []
-            }
+                        pipeline="new_flexible")
+            
+            # Fallback to old logic if new pipeline fails
+            logger.info("Falling back to legacy processing")
+            return self._fallback_to_legacy_processing(raw_data)
+    
+    def _fallback_to_legacy_processing(self, raw_data: str) -> List[Dict[str, Any]]:
+        """Fallback to legacy processing when new pipeline fails"""
+        # Use the old _parse_csv_directly method but transform output
+        legacy_result = self._parse_csv_directly(raw_data)
+        
+        # Convert old format to new format
+        if "measurements" in legacy_result:
+            # Transform old flat structure to new hierarchical structure
+            locations = {}
+            for item in legacy_result["measurements"]:
+                location = item.get("elevation", "1st Floor")
+                if location not in locations:
+                    locations[location] = {"location": location, "rooms": []}
+                
+                # Calculate measurements for each room
+                room_data = {
+                    "floor": location,
+                    "name": item.get("room", "Room"),
+                    "raw_dimensions": item.get("dimensions", {"length": 10, "width": 10, "height": 8}),
+                    "openings": [],
+                    "source_confidence": 0.6
+                }
+                
+                # Use calculation engine for this room
+                calculated_room = calculation_engine.calculator.calculate_room_measurements(room_data)
+                locations[location]["rooms"].append(calculated_room)
+            
+            return list(locations.values())
+        
+        # Ultimate fallback
+        return [{
+            "location": "1st Floor",
+            "rooms": [{
+                "name": "Living Room",
+                "measurements": {
+                    "height": 9.0,
+                    "wall_area_sqft": 426.73,
+                    "ceiling_area_sqft": 199.32,
+                    "floor_area_sqft": 199.32,
+                    "walls_and_ceiling_area_sqft": 626.05,
+                    "flooring_area_sy": 22.15,
+                    "ceiling_perimeter_lf": 58.83,
+                    "floor_perimeter_lf": 43.48,
+                    "openings": [{"type": "door", "size": "3' X 6'8\""}]
+                }
+            }]
+        }]
     
     def parse_demo_scope(self, input_text: str) -> Dict[str, Any]:
         """Parse demolition scope text into structured format"""

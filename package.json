@@ -1,0 +1,25 @@
+{
+  "name": "mj-the-estimator",
+  "version": "1.0.0",
+  "description": "MJ The Estimator - Construction Estimation Tool",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && call venv\\Scripts\\activate && uvicorn main:app --reload --port 8001",
+    "dev:frontend": "cd frontend && npm run dev",
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && pip install -r requirements.txt",
+    "clean": "rimraf frontend/dist frontend/node_modules backend/__pycache__ backend/**/__pycache__",
+    "build": "cd frontend && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "rimraf": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
