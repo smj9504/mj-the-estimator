@@ -1,0 +1,266 @@
+/* WorkScope CSS Modules */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Toggle buttons */
+.toggleContainer {
+  display: flex;
+  gap: 1rem;
+}
+
+.toggleButton {
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.toggleButtonActive {
+  background-color: #2563EB !important;
+  color: white !important;
+}
+
+.toggleButtonActive:hover {
+  background-color: #1D4ED8 !important;
+}
+
+.toggleButtonInactive {
+  background-color: #E5E7EB !important;
+  color: #374151 !important;
+}
+
+.toggleButtonInactive:hover {
+  background-color: #D1D5DB !important;
+}
+
+/* Primary action buttons */
+.primaryButton {
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  background-color: #2563EB !important;
+  color: white !important;
+  transition: all 0.2s ease;
+}
+
+.primaryButton:hover {
+  background-color: #1D4ED8 !important;
+}
+
+.primaryButton:disabled {
+  background-color: #D1D5DB !important;
+  color: #6B7280 !important;
+  cursor: not-allowed;
+}
+
+/* Small buttons */
+.smallButton {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  font-size: 0.75rem;
+  border: none;
+  cursor: pointer;
+  color: white !important;
+  transition: all 0.2s ease;
+}
+
+.addButton {
+  background-color: #2563EB !important;
+}
+
+.addButton:hover {
+  background-color: #1D4ED8 !important;
+}
+
+.removeButton {
+  background-color: #DC2626 !important;
+}
+
+.removeButton:hover {
+  background-color: #B91C1C !important;
+}
+
+.greenButton {
+  background-color: #059669 !important;
+}
+
+.greenButton:hover {
+  background-color: #047857 !important;
+}
+
+/* Form sections */
+.section {
+  border: 1px solid #E5E7EB;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+}
+
+.sectionTitle {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: #111827;
+  margin-bottom: 1rem;
+}
+
+.subsectionTitle {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #1F2937;
+  margin-bottom: 0.75rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 0.25rem;
+}
+
+.input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+}
+
+.input:focus {
+  outline: none;
+  border-color: #3B82F6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: #3B82F6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  background-color: white;
+}
+
+/* Room section */
+.roomContainer {
+  background-color: #F9FAFB;
+  padding: 1rem;
+  border-radius: 0.375rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.locationHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.locationInput {
+  font-size: 1.125rem;
+  font-weight: 500;
+  border: none;
+  border-bottom: 1px solid #D1D5DB;
+  background-color: transparent;
+  flex: 1;
+  margin-right: 1rem;
+}
+
+.locationInput:focus {
+  outline: none;
+  border-bottom-color: #3B82F6;
+}
+
+/* Array item container */
+.arrayItemContainer {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.arrayItemInput {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 0.375rem;
+}
+
+/* Error and data display */
+.errorContainer {
+  padding: 1rem;
+  background-color: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: 0.375rem;
+}
+
+.errorText {
+  color: #991B1B;
+}
+
+.dataContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dataTitle {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: #111827;
+}
+
+.dataDisplay {
+  background-color: #F9FAFB;
+  padding: 1rem;
+  border-radius: 0.375rem;
+}
+
+.dataCode {
+  font-size: 0.875rem;
+  color: #374151;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.actionsContainer {
+  display: flex;
+  justify-content: flex-end;
+}

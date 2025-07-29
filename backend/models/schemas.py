@@ -45,6 +45,7 @@ class PreEstimateSessionResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    project_name: Optional[str] = None
 
 class CompletePreEstimateResponse(BaseModel):
     session_id: str

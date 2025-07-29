@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { uploadMeasurementFile, createSession } from '../../utils/api';
+import { uploadMeasurementFile, createSession, getSession } from '../../utils/api';
 import logger from '../../utils/logger';
 
 const MeasurementData = () => {
@@ -16,8 +16,35 @@ const MeasurementData = () => {
   const [sessionLoading, setSessionLoading] = useState(false);
   const [pendingFileProcess, setPendingFileProcess] = useState(false);
   const [projectName, setProjectName] = useState('');
+  const [sessionData, setSessionData] = useState(null);
 
   // Remove automatic session creation on page load
+
+  // Fetch session data when sessionId is available
+  useEffect(() => {
+    if (sessionId && !sessionData) {
+      fetchSessionData(sessionId);
+    }
+  }, [sessionId, sessionData]);
+
+  // Load existing parsed data from session storage on page load
+  useEffect(() => {
+    if (sessionId) {
+      const storedData = sessionStorage.getItem(`measurementData_${sessionId}`);
+      if (storedData) {
+        try {
+          const parsedStoredData = JSON.parse(storedData);
+          setParsedData(parsedStoredData);
+          logger.info('Loaded existing measurement data from session storage', {
+            dataLength: parsedStoredData.length,
+            sessionId
+          });
+        } catch (error) {
+          logger.error('Error loading stored measurement data', error);
+        }
+      }
+    }
+  }, [sessionId]);
 
   // Auto-process file when session becomes available
   useEffect(() => {
@@ -27,6 +54,16 @@ const MeasurementData = () => {
     }
   }, [sessionId, pendingFileProcess, file]);
 
+  const fetchSessionData = async (currentSessionId) => {
+    try {
+      const response = await getSession(currentSessionId);
+      setSessionData(response.data);
+      logger.info('Session data fetched successfully', response.data);
+    } catch (error) {
+      logger.error('Failed to fetch session data', error);
+    }
+  };
+
   const createNewSession = async () => {
     try {
       setSessionLoading(true);
@@ -34,6 +71,7 @@ const MeasurementData = () => {
       const response = await createSession(projectName || null);
       const newSessionId = response.data.session_id;
       setSessionId(newSessionId);
+      setSessionData(response.data); // Set session data immediately
       // Update URL with new session ID
       navigate(`/pre-estimate/measurement-data?session=${newSessionId}`, { replace: true });
       logger.info('Session created successfully:', newSessionId, { projectName });
@@ -189,6 +227,13 @@ const MeasurementData = () => {
             <div className="text-sm">
               {sessionLoading ? (
                 <span className="text-blue-600">🔄 Initializing session...</span>
+              ) : sessionId && sessionData ? (
+                <span className="text-gray-500">
+                  {sessionData.project_name ? 
+                    `Project: ${sessionData.project_name}` : 
+                    `Session: ${sessionId.slice(-8)}`
+                  }
+                </span>
               ) : sessionId ? (
                 <span className="text-gray-500">Session: {sessionId.slice(-8)}</span>
               ) : (
@@ -239,8 +284,50 @@ const MeasurementData = () => {
         </div>
       )}
 
-      {/* File Upload Section */}
-      {(sessionId || sessionLoading) && (
+      {/* Existing Data Notice */}
+      {parsedData && !isProcessing && (
+        <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 mb-6">
+          <div className="flex items-start space-x-3">
+            <div className="flex-shrink-0">
+              <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-xs">✓</span>
+              </div>
+            </div>
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-blue-900 mb-1">
+                Measurement Data Already Processed
+              </h4>
+              <p className="text-sm text-blue-700 mb-3">
+                This session already has processed measurement data with{' '}
+                {parsedData.length} location(s) and{' '}
+                {parsedData.reduce((total, loc) => total + (loc.rooms?.length || 0), 0)} room(s).
+                You can upload a new file to replace the existing data or continue with the current data.
+              </p>
+              <div className="flex space-x-3">
+                <button
+                  onClick={handleNext}
+                  className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md font-medium hover:bg-blue-700 transition-colors"
+                >
+                  Continue with Current Data →
+                </button>
+                <button
+                  onClick={() => {
+                    setParsedData(null);
+                    sessionStorage.removeItem(`measurementData_${sessionId}`);
+                    setFile(null);
+                  }}
+                  className="px-4 py-2 bg-white text-blue-600 text-sm rounded-md font-medium border border-blue-300 hover:bg-blue-50 transition-colors"
+                >
+                  Upload New File
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Upload Section - Show always if no parsed data, or if user clicked "Upload New File" */}
+      {(sessionId || sessionLoading) && (!parsedData || file) && (
       <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
         <div className="text-center">
           <div className="mb-4">
@@ -277,12 +364,11 @@ const MeasurementData = () => {
           <button
             onClick={handleProcess}
             disabled={!file || isProcessing || sessionLoading || !sessionId || pendingFileProcess}
-            style={{
-              backgroundColor: (!file || isProcessing || sessionLoading || !sessionId || pendingFileProcess) ? '#9CA3AF' : '#2563EB',
-              color: (!file || isProcessing || sessionLoading || !sessionId || pendingFileProcess) ? '#374151' : '#FFFFFF',
-              cursor: (!file || isProcessing || sessionLoading || !sessionId || pendingFileProcess) ? 'not-allowed' : 'pointer'
-            }}
-            className="px-4 py-2 rounded-md font-medium shadow-md hover:opacity-90"
+            className={`px-4 py-2 rounded-md font-medium shadow-md hover:opacity-90 ${
+              (!file || isProcessing || sessionLoading || !sessionId || pendingFileProcess) 
+                ? 'bg-gray-400 text-gray-700 cursor-not-allowed' 
+                : 'bg-blue-600 text-white cursor-pointer hover:bg-blue-700'
+            }`}
           >
             {sessionLoading ? 'Initializing Session...' : 
              pendingFileProcess ? 'Waiting for Session...' :
@@ -406,11 +492,7 @@ const MeasurementData = () => {
             </button>
             <button
               onClick={handleNext}
-              style={{
-                backgroundColor: '#2563EB',
-                color: '#FFFFFF'
-              }}
-              className="px-6 py-2 rounded-md font-medium shadow-md hover:opacity-90"
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium shadow-md hover:bg-blue-700 transition-colors"
             >
               Review Openings →
             </button>

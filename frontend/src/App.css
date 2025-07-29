@@ -8,6 +8,10 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+/* Only center text for specific elements if needed */
+.text-center-root {
   text-align: center;
 }
 

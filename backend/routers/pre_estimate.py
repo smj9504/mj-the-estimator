@@ -39,7 +39,8 @@ async def create_session(project_name: Optional[str] = None):
             session_id=session['session_id'],
             status=session['status'],
             created_at=session['created_at'],
-            updated_at=session['updated_at']
+            updated_at=session['updated_at'],
+            project_name=session['project_name'] if 'project_name' in session.keys() else None
         )
         
     except Exception as e:
@@ -64,7 +65,8 @@ async def get_session(session_id: str):
             session_id=session['session_id'],
             status=session['status'],
             created_at=session['created_at'],
-            updated_at=session['updated_at']
+            updated_at=session['updated_at'],
+            project_name=session['project_name'] if 'project_name' in session.keys() else None
         )
         
     except HTTPException:

@@ -37,11 +37,7 @@ function App() {
                 </p>
                 <button
                   onClick={() => window.location.href = '/pre-estimate'}
-                  style={{
-                    backgroundColor: '#2563EB',
-                    color: '#FFFFFF'
-                  }}
-                  className="px-4 py-2 rounded-md font-medium shadow-md hover:opacity-90"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md font-medium shadow-md hover:bg-blue-700 transition-colors"
                 >
                   Back to Pre-Estimate
                 </button>
