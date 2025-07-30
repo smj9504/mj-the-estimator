@@ -1,10 +1,12 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import PreEstimateMain from './pages/PreEstimate/PreEstimateMain'
 import OpeningVerification from './pages/PreEstimate/OpeningVerification'
 import MeasurementData from './pages/PreEstimate/MeasurementData'
+import MaterialScope from './pages/PreEstimate/MaterialScope'
 import DemoScope from './pages/PreEstimate/DemoScope'
 import WorkScope from './pages/PreEstimate/WorkScope'
 import CreateProject from './pages/CreateProject'
+import ProjectManagement from './pages/ProjectManagement'
+import Dashboard from './pages/Dashboard'
 import './App.css'
 
 function App() {
@@ -12,16 +14,22 @@ function App() {
     <Router>
       <div className="min-h-screen bg-gray-50">
         <Routes>
-          {/* Default route redirects to create project */}
-          <Route path="/" element={<Navigate to="/create-project" replace />} />
+          {/* Default route redirects to project management */}
+          <Route path="/" element={<Navigate to="/projects" replace />} />
+          
+          {/* Project management */}
+          <Route path="/projects" element={<ProjectManagement />} />
           
           {/* Project creation */}
           <Route path="/create-project" element={<CreateProject />} />
           
+          {/* Dashboard */}
+          <Route path="/dashboard/:sessionId" element={<Dashboard />} />
+          
           {/* Pre-estimate workflow routes */}
-          <Route path="/pre-estimate" element={<PreEstimateMain />} />
           <Route path="/pre-estimate/measurement-data" element={<MeasurementData />} />
           <Route path="/pre-estimate/opening-verification" element={<OpeningVerification />} />
+          <Route path="/pre-estimate/material-scope" element={<MaterialScope />} />
           <Route path="/pre-estimate/demo-scope" element={<DemoScope />} />
           <Route path="/pre-estimate/work-scope" element={<WorkScope />} />
           
@@ -36,17 +44,17 @@ function App() {
                   This will be the main estimate generation screen
                 </p>
                 <button
-                  onClick={() => window.location.href = '/pre-estimate'}
+                  onClick={() => window.location.href = '/projects'}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md font-medium shadow-md hover:bg-blue-700 transition-colors"
                 >
-                  Back to Pre-Estimate
+                  Back to Projects
                 </button>
               </div>
             </div>
           } />
           
           {/* Catch all route */}
-          <Route path="*" element={<Navigate to="/create-project" replace />} />
+          <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </div>
     </Router>

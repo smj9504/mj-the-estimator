@@ -120,9 +120,15 @@ const OpeningVerification = () => {
   };
 
   const handleContinue = () => {
+    // Mark this step as completed
+    const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+    completionStatus.openingVerification = true;
+    sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
+    
     // Navigate to the next step in the workflow
-    navigate(`/pre-estimate/work-scope?session=${sessionId}`);
+    navigate(`/pre-estimate/material-scope?session=${sessionId}`);
   };
+
 
   const handleBack = () => {
     navigate(`/pre-estimate/measurement-data?session=${sessionId}`);
@@ -160,6 +166,24 @@ const OpeningVerification = () => {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="max-w-7xl mx-auto">
+          <div className="flex justify-between items-center mb-4">
+            <button
+              onClick={() => {
+                const currentSessionId = sessionId || sessionStorage.getItem('currentSessionId');
+                if (currentSessionId) {
+                  navigate(`/dashboard/${currentSessionId}`);
+                } else {
+                  navigate('/projects');
+                }
+              }}
+              className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md transition-colors flex items-center space-x-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              <span>대시보드로</span>
+            </button>
+          </div>
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Opening Verification</h1>
@@ -337,7 +361,7 @@ const OpeningVerification = () => {
             }}
             className="px-6 py-2 rounded-lg font-medium shadow-md hover:opacity-90"
           >
-            {saving ? 'Saving...' : 'Continue to Work Scope →'}
+            {saving ? 'Saving...' : 'Continue to Material Scope →'}
           </button>
         </div>
       </div>

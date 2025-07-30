@@ -8,7 +8,8 @@ from models.database import execute_insert, execute_query, execute_update
 from models.schemas import (
     MeasurementDataResponse, DemoScopeRequest, DemoScopeResponse,
     WorkScopeRequest, WorkScopeResponse, PreEstimateSessionResponse,
-    CompletePreEstimateResponse, RoomOpeningUpdate, RoomOpeningResponse
+    CompletePreEstimateResponse, RoomOpeningUpdate, RoomOpeningResponse,
+    ProjectUpdateRequest, ProjectListResponse
 )
 from services.ai_service import ai_service
 from services.ocr_service import ocr_service
@@ -412,3 +413,112 @@ async def update_room_openings(request: RoomOpeningUpdate):
         logger.error(f"Request data: session_id={request.session_id}, location={request.location}, room_name={request.room_name}")
         logger.error(f"Openings: {request.openings}")
         raise HTTPException(status_code=500, detail=f"Failed to update room openings: {str(e)}")
+
+# Project Management Endpoints
+@router.get("/projects", response_model=ProjectListResponse)
+async def get_all_projects():
+    """Get all projects (pre-estimate sessions)"""
+    try:
+        projects = execute_query(
+            "SELECT * FROM pre_estimate_sessions ORDER BY created_at DESC"
+        )
+        
+        project_list = []
+        for project in projects:
+            project_list.append(PreEstimateSessionResponse(
+                id=project['id'],
+                session_id=project['session_id'],
+                status=project['status'],
+                created_at=project['created_at'],
+                updated_at=project['updated_at'],
+                project_name=project['project_name'] if 'project_name' in project.keys() else None
+            ))
+        
+        return ProjectListResponse(projects=project_list)
+        
+    except Exception as e:
+        logger.error(f"Error getting projects: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get projects")
+
+@router.put("/projects/{session_id}", response_model=PreEstimateSessionResponse)
+async def update_project(session_id: str, request: ProjectUpdateRequest):
+    """Update project name"""
+    try:
+        # Check if project exists
+        existing_project = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not existing_project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Update project
+        execute_update(
+            "UPDATE pre_estimate_sessions SET project_name = ?, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+            (request.project_name, session_id)
+        )
+        
+        # Get updated project
+        updated_project = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )[0]
+        
+        return PreEstimateSessionResponse(
+            id=updated_project['id'],
+            session_id=updated_project['session_id'],
+            status=updated_project['status'],
+            created_at=updated_project['created_at'],
+            updated_at=updated_project['updated_at'],
+            project_name=updated_project['project_name']
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating project: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update project")
+
+@router.delete("/projects/{session_id}")
+async def delete_project(session_id: str):
+    """Delete a project and all related data"""
+    try:
+        # Check if project exists
+        existing_project = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not existing_project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Delete related data first (due to foreign key constraints)
+        execute_update(
+            "DELETE FROM measurement_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        execute_update(
+            "DELETE FROM demo_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        execute_update(
+            "DELETE FROM work_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        # Delete the project
+        execute_update(
+            "DELETE FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        return {"message": "Project deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting project: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete project")

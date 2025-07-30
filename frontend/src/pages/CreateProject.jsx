@@ -236,7 +236,7 @@ const CreateProject = () => {
   };
 
   const handleCancel = () => {
-    navigate('/');
+    navigate('/projects');
   };
 
   return (

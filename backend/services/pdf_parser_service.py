@@ -31,17 +31,18 @@ class PDFParserService:
         """Extract room measurements from PDF text using improved pattern matching"""
         rooms = []
         
-        # Enhanced patterns for insurance estimates (State Farm, etc.)
+        # Enhanced patterns for insurance estimates (Travelers, etc.)
         patterns = {
-            'room_with_height': r'([A-Za-z\s\d]+?)\s+Height:\s*(\d+)[\'"]?(?:\s*(\d+)[\'"]?)?|([A-Za-z\s\d]+?)\s+Height:\s*(Peaked|peaked)',
+            'room_with_height': r'([A-Za-z\s]+)\s*Height:\s*([^\n]*?)(?:\n|$)',
             'wall_area': r'(\d+(?:\.\d+)?)\s*SF\s*Walls(?:\s*&\s*Ceiling)?',
             'ceiling_area': r'(\d+(?:\.\d+)?)\s*SF\s*(?:Walls\s*&\s*)?Ceiling',
             'floor_area': r'(\d+(?:\.\d+)?)\s*SF\s*Floor(?:\s|$)',
             'wall_ceiling_combined': r'(\d+(?:\.\d+)?)\s*SF\s*Walls\s*&\s*Ceiling',
-            'perimeter': r'(\d+(?:\.\d+)?)\s*LF\s*(?:Floor|Ceil\.?)\s*Perimeter',
-            'door_pattern': r'Door\s+(\d+[\'"]?\s*[xX×]\s*\d+[\'"]?(?:\s*\d+[\'"]?)?)',
-            'window_pattern': r'Window\s+(\d+[\'"]?\s*[xX×]\s*\d+[\'"]?(?:\s*\d+[\'"]?)?)',
-            'missing_wall_pattern': r'Missing Wall\s+(\d+[\'"]?\s*[xX×]?\s*\d+[\'"]?(?:\s*[xX×]?\s*\d+[\'"]?)?)',
+            'floor_perimeter': r'(\d+(?:\.\d+)?)\s*LF\s*Floor\s*Perimeter',
+            'ceiling_perimeter': r'(\d+(?:\.\d+)?)\s*LF\s*(?:Ceil\.?|Ceiling)\s*Perimeter',
+            'door_pattern': r'Door\s+([^O\n]+?)(?:\s+Opens|\n|$)',
+            'window_pattern': r'Window\s+([^O\n]+?)(?:\s+Opens|\n|$)',
+            'missing_wall_pattern': r'Missing Wall(?:\s*-\s*Goes to Floor)?\s+([^O\n]+?)(?:\s+Opens|\n|$)',
             'opening_context': r'(Door|Window|Missing Wall)[\s\S]*?(?=Door|Window|Missing Wall|QUANTITY|DESCRIPTION|Total:|$)'
         }
         
@@ -55,23 +56,25 @@ class PDFParserService:
             # Check for room name with height (various formats)
             height_match = re.search(patterns['room_with_height'], line)
             if height_match:
-                # Handle different height patterns
-                if height_match.group(4):  # Peaked ceiling case
-                    room_name = height_match.group(4).strip()
-                    height = "Peaked"
-                elif height_match.group(5) and height_match.group(5).lower() == 'peaked':
-                    room_name = height_match.group(4).strip()
-                    height = "Peaked"
+                room_name = height_match.group(1).strip()
+                height_str = height_match.group(2).strip()
+                
+                # Parse height: handle "8' 8"", "Sloped", etc.
+                if height_str.lower() in ['sloped', 'peaked']:
+                    height = height_str.title()
                 else:
-                    room_name = height_match.group(1).strip()
-                    feet = int(height_match.group(2))
-                    inches = height_match.group(3)  # Could be None
-                    
-                    # Calculate height in feet with decimal inches
-                    if inches:
-                        height = feet + (int(inches) / 12.0)
+                    # Try to extract numeric height
+                    height_numeric = re.search(r"(\d+)'\s*(\d+)?", height_str)
+                    if height_numeric:
+                        feet = int(height_numeric.group(1))
+                        inches = height_numeric.group(2)
+                        if inches:
+                            height = round(feet + (int(inches) / 12.0), 2)
+                        else:
+                            height = float(feet)
                     else:
-                        height = float(feet)
+                        # Fallback to default height
+                        height = 8.0
                 
                 # Extract measurements from the following lines (expand context for openings)
                 context_lines = lines[i:i+30]  # More context for openings
@@ -87,12 +90,21 @@ class PDFParserService:
                     rooms.append(room_data)
                     logger.debug(f"Found room: {room_name} with height {height} in {current_location}")
             
-            # Update location if found
-            if "Main Level" in line or "Level 2" in line or "Basement" in line:
-                for level in ["Main Level", "Level 2", "Basement"]:
-                    if level in line:
-                        current_location = level
-                        break
+            # Update location if found - look for more location patterns
+            location_patterns = [
+                "Main Level", "Level 1", "Level 2", "Level 3", "Basement", 
+                "First Floor", "Second Floor", "Third Floor", "Ground Floor",
+                "SKETCH1", "Level 1"  # Handle PDF-specific patterns
+            ]
+            
+            for location in location_patterns:
+                if location in line:
+                    # Special handling for sketch patterns
+                    if "SKETCH" in location or location == "Level 1":
+                        current_location = "Level 1"
+                    else:
+                        current_location = location
+                    break
             
             i += 1
         
@@ -135,11 +147,15 @@ class PDFParserService:
         else:
             measurements["walls_and_ceiling_area_sqft"] = round(measurements["wall_area_sqft"] + measurements["ceiling_area_sqft"], 2)
         
-        # Extract perimeter
-        perimeter_match = re.search(patterns['perimeter'], context_text)
-        if perimeter_match:
-            measurements["floor_perimeter_lf"] = round(float(perimeter_match.group(1)), 2)
-            measurements["ceiling_perimeter_lf"] = round(float(perimeter_match.group(1)), 2)
+        # Extract floor perimeter
+        floor_perimeter_match = re.search(patterns['floor_perimeter'], context_text)
+        if floor_perimeter_match:
+            measurements["floor_perimeter_lf"] = round(float(floor_perimeter_match.group(1)), 2)
+        
+        # Extract ceiling perimeter
+        ceiling_perimeter_match = re.search(patterns['ceiling_perimeter'], context_text)
+        if ceiling_perimeter_match:
+            measurements["ceiling_perimeter_lf"] = round(float(ceiling_perimeter_match.group(1)), 2)
         
         # Extract openings with improved pattern matching
         self._extract_openings(context_text, measurements["openings"])
@@ -154,7 +170,9 @@ class PDFParserService:
         return measurements
     
     def _extract_openings(self, context_text: str, openings_list: List[Dict[str, str]]):
-        """Extract openings (doors, windows, missing walls) from context text with improved line-by-line parsing"""
+        """Extract openings (doors, windows, missing walls) from context text with improved parsing for complex formats"""
+        
+        logger.debug(f"Extracting openings from context text: {context_text[:500]}...")  # Log first 500 chars
         
         # Process line by line for accurate extraction
         lines = context_text.split('\n')
@@ -164,66 +182,269 @@ class PDFParserService:
             if not line_clean:
                 continue
                 
-            # Door extraction - handle all door formats
+            # Log lines that might contain opening information
+            if any(keyword in line_clean.lower() for keyword in ['door', 'window', 'missing', 'wall', 'opening']):
+                logger.debug(f"Potential opening line: '{line_clean}'")
+                
+            # Door extraction - handle complex measurement formats and "Opens into" information
             if line_clean.startswith('Door '):
-                # Extract everything between "Door " and " Opens" (or end of line)
-                door_match = re.search(r'Door\s+([^O\n]+?)(?=\s+Opens|$)', line_clean)
+                logger.debug(f"Processing door line: '{line_clean}'")
+                # Use simpler regex for known PDF format
+                door_match = re.search(r'Door\s+([^O]+?)(?:\s+(Opens\s+into\s+[^\n]+))?(?:\n|$)', line_clean)
                 if door_match:
                     size = door_match.group(1).strip()
-                    # Clean up any trailing characters
-                    size = re.sub(r'\s+$', '', size)
+                    opens_info = door_match.group(2) if door_match.group(2) else None
+                    opens_to = None
+                    is_external = False
+                    is_internal = True
                     
-                    # Check for duplicates
-                    existing = any(
-                        opening['type'] == 'door' and opening['size'] == size
-                        for opening in openings_list
-                    )
-                    if not existing and size:
-                        openings_list.append({
-                            "type": "door",
-                            "size": size
-                        })
+                    if opens_info:
+                        # Extract destination from "Opens into DESTINATION"
+                        dest_match = re.search(r'Opens\s+into\s+(.+)', opens_info)
+                        if dest_match:
+                            opens_to = dest_match.group(1).strip()
+                            is_external = 'exterior' in opens_to.lower()
+                            is_internal = not is_external
+                    
+                    size = self._clean_measurement_string(size)
+                    logger.debug(f"Door extracted - size: '{size}', opens_to: '{opens_to}', external: {is_external}")
+                    
+                    if size:
+                        # Check for duplicates
+                        existing = any(
+                            opening['type'] == 'door' and 
+                            opening['size'] == size and
+                            opening.get('opens_to') == opens_to
+                            for opening in openings_list
+                        )
+                        if not existing:
+                            opening_entry = {
+                                "type": "door",
+                                "size": size,
+                                "opens_to": opens_to,
+                                "is_external": is_external,
+                                "is_internal": is_internal
+                            }
+                            openings_list.append(opening_entry)
+                            logger.debug(f"Added door opening: {opening_entry}")
+                        else:
+                            logger.debug(f"Skipped duplicate door: size={size}, opens_to={opens_to}")
             
-            # Window extraction - handle all window formats  
+            # Window extraction - handle complex measurement formats and "Opens into" information
             elif line_clean.startswith('Window '):
-                # Extract everything between "Window " and " Opens" (or end of line)
-                window_match = re.search(r'Window\s+([^O\n]+?)(?=\s+Opens|$)', line_clean)
+                logger.debug(f"Processing window line: '{line_clean}'")
+                # Use simpler regex for known PDF format
+                window_match = re.search(r'Window\s+([^O]+?)(?:\s+(Opens\s+into\s+[^\n]+))?(?:\n|$)', line_clean)
                 if window_match:
                     size = window_match.group(1).strip()
-                    # Clean up any trailing characters
-                    size = re.sub(r'\s+$', '', size)
+                    opens_info = window_match.group(2) if window_match.group(2) else None
+                    opens_to = None
+                    is_external = True  # Windows default to external
+                    is_internal = False
                     
-                    # Check for duplicates
-                    existing = any(
-                        opening['type'] == 'window' and opening['size'] == size
-                        for opening in openings_list
-                    )
-                    if not existing and size:
-                        openings_list.append({
-                            "type": "window",
-                            "size": size
-                        })
+                    if opens_info:
+                        # Extract destination from "Opens into DESTINATION"
+                        dest_match = re.search(r'Opens\s+into\s+(.+)', opens_info)
+                        if dest_match:
+                            opens_to = dest_match.group(1).strip()
+                            is_external = 'exterior' in opens_to.lower()
+                            is_internal = not is_external
+                    
+                    size = self._clean_measurement_string(size)
+                    logger.debug(f"Window extracted - size: '{size}', opens_to: '{opens_to}', external: {is_external}")
+                    
+                    if size:
+                        # Check for duplicates
+                        existing = any(
+                            opening['type'] == 'window' and 
+                            opening['size'] == size and
+                            opening.get('opens_to') == opens_to
+                            for opening in openings_list
+                        )
+                        if not existing:
+                            opening_entry = {
+                                "type": "window",
+                                "size": size,
+                                "opens_to": opens_to,
+                                "is_external": is_external,
+                                "is_internal": is_internal
+                            }
+                            openings_list.append(opening_entry)
+                            logger.debug(f"Added window opening: {opening_entry}")
+                        else:
+                            logger.debug(f"Skipped duplicate window: size={size}, opens_to={opens_to}")
             
-            # Missing Wall extraction - handle complex formats
+            # Missing Wall extraction - handle complex formats and "Opens into" information
             elif line_clean.startswith('Missing Wall'):
-                # Extract everything between "Missing Wall" and " Opens" (or end of line)
-                # Handle both "Missing Wall " and "Missing Wall - Goes to Floor "
-                missing_match = re.search(r'Missing Wall(?:\s*-\s*Goes to Floor)?\s+([^O\n]+?)(?=\s+Opens|$)', line_clean)
+                logger.debug(f"Processing missing wall line: '{line_clean}'")
+                # Use simpler regex for known PDF format
+                missing_match = re.search(r'Missing Wall(?:\s*-\s*Goes to Floor)?\s+([^O]+?)(?:\s+(Opens\s+into\s+[^\n]+))?(?:\n|$)', line_clean)
                 if missing_match:
                     size = missing_match.group(1).strip()
-                    # Clean up any trailing characters
-                    size = re.sub(r'\s+$', '', size)
+                    opens_info = missing_match.group(2) if missing_match.group(2) else None
+                    opens_to = None
+                    is_external = False  # Missing walls default to internal
+                    is_internal = True
                     
-                    # Check for duplicates
-                    existing = any(
-                        opening['type'] == 'open_wall' and opening['size'] == size
-                        for opening in openings_list
-                    )
-                    if not existing and size:
-                        openings_list.append({
-                            "type": "open_wall",
-                            "size": size
-                        })
+                    if opens_info:
+                        # Extract destination from "Opens into DESTINATION"
+                        dest_match = re.search(r'Opens\s+into\s+(.+)', opens_info)
+                        if dest_match:
+                            opens_to = dest_match.group(1).strip()
+                            is_external = 'exterior' in opens_to.lower()
+                            is_internal = not is_external
+                    
+                    size = self._clean_measurement_string(size)
+                    logger.debug(f"Missing wall extracted - size: '{size}', opens_to: '{opens_to}', external: {is_external}")
+                    
+                    if size:
+                        # Check for duplicates
+                        existing = any(
+                            opening['type'] == 'open_wall' and 
+                            opening['size'] == size and
+                            opening.get('opens_to') == opens_to
+                            for opening in openings_list
+                        )
+                        if not existing:
+                            opening_entry = {
+                                "type": "open_wall",
+                                "size": size,
+                                "opens_to": opens_to,
+                                "is_external": is_external,
+                                "is_internal": is_internal
+                            }
+                            openings_list.append(opening_entry)
+                            logger.debug(f"Added missing wall opening: {opening_entry}")
+                        else:
+                            logger.debug(f"Skipped duplicate missing wall: size={size}, opens_to={opens_to}")
+            
+            # Try alternative patterns for openings that might not start with exact keywords
+            else:
+                # Check for alternative door patterns
+                door_patterns = [
+                    r'(\d+\'\s*\d*"?\s*[Xx]\s*\d+\'\s*\d*"?)\s+[Dd]oor',
+                    r'[Dd]oor\s+(\d+\'\s*\d*"?\s*[Xx]\s*\d+\'\s*\d*"?)',
+                    r'(\d+\'\s*[Xx]\s*\d+\'\s*\d*"?).*[Dd]oor'
+                ]
+                
+                for pattern in door_patterns:
+                    match = re.search(pattern, line_clean)
+                    if match:
+                        size = match.group(1).strip()
+                        size = self._clean_measurement_string(size)
+                        if size and not any(opening['type'] == 'door' and opening['size'] == size for opening in openings_list):
+                            opening_entry = {
+                                "type": "door",
+                                "size": size,
+                                "opens_to": None,
+                                "is_external": False,
+                                "is_internal": True
+                            }
+                            openings_list.append(opening_entry)
+                            logger.debug(f"Added door from alternative pattern: {opening_entry}")
+                        break
+                
+                # Check for alternative window patterns
+                window_patterns = [
+                    r'(\d+\'\s*\d*"?\s*[Xx]\s*\d+\'\s*\d*"?)\s+[Ww]indow',
+                    r'[Ww]indow\s+(\d+\'\s*\d*"?\s*[Xx]\s*\d+\'\s*\d*"?)',
+                    r'(\d+\'\s*[Xx]\s*\d+\'\s*\d*"?).*[Ww]indow'
+                ]
+                
+                for pattern in window_patterns:
+                    match = re.search(pattern, line_clean)
+                    if match:
+                        size = match.group(1).strip()
+                        size = self._clean_measurement_string(size)
+                        if size and not any(opening['type'] == 'window' and opening['size'] == size for opening in openings_list):
+                            opening_entry = {
+                                "type": "window",
+                                "size": size,
+                                "opens_to": None,
+                                "is_external": True,
+                                "is_internal": False
+                            }
+                            openings_list.append(opening_entry)
+                            logger.debug(f"Added window from alternative pattern: {opening_entry}")
+                        break
+        
+        logger.debug(f"Total openings extracted: {len(openings_list)}")
+        for i, opening in enumerate(openings_list):
+            logger.debug(f"Opening {i+1}: {opening}")
+    
+    def _parse_opening_line(self, line: str, opening_type: str) -> Optional[Dict[str, Any]]:
+        """Parse opening line to extract size, opens_to, and classification information"""
+        try:
+            # Handle different opening type patterns - Updated for "Opens into" format
+            if opening_type == 'Door':
+                pattern = r'Door\s+([^O\n]*?)(?:\s+Opens\s+into\s+([^\n]*?))?(?:\n|$)'
+            elif opening_type == 'Window':
+                pattern = r'Window\s+([^O\n]*?)(?:\s+Opens\s+into\s+([^\n]*?))?(?:\n|$)'
+            elif opening_type == 'Missing Wall':
+                pattern = r'Missing Wall(?:\s*-\s*Goes to Floor)?\s+([^O\n]*?)(?:\s+Opens\s+into\s+([^\n]*?))?(?:\n|$)'
+            else:
+                return None
+            
+            match = re.search(pattern, line, re.IGNORECASE)
+            if not match:
+                return None
+                
+            size = match.group(1).strip() if match.group(1) else ''
+            opens_to = match.group(2).strip() if match.group(2) else None
+            
+            # Clean the size string
+            size = self._clean_measurement_string(size)
+            
+            if not size:
+                return None
+            
+            # Determine if opening is external vs internal
+            is_external = False
+            is_internal = True
+            
+            if opens_to:
+                # Clean up opens_to string
+                opens_to = opens_to.strip().rstrip('.')
+                
+                # Determine if it's external based on keywords (including "Exterior")
+                external_keywords = ['exterior', 'outside', 'outdoor', 'yard', 'patio', 'deck', 'balcony']
+                is_external = any(keyword in opens_to.lower() for keyword in external_keywords)
+                is_internal = not is_external
+            else:
+                # Default classification based on opening type
+                if opening_type == 'Window':
+                    is_external = True
+                    is_internal = False
+                elif opening_type == 'Door':
+                    is_external = False  # Assume internal unless specified
+                    is_internal = True
+                elif opening_type == 'Missing Wall':
+                    is_external = False
+                    is_internal = True
+            
+            return {
+                'size': size,
+                'opens_to': opens_to,
+                'is_external': is_external,
+                'is_internal': is_internal
+            }
+            
+        except Exception as e:
+            logger.error(f"Error parsing opening line '{line}': {e}")
+            return None
+    
+    def _clean_measurement_string(self, size: str) -> str:
+        """Clean up measurement strings, handling fractions and complex formats"""
+        if not size:
+            return size
+            
+        # Handle fractions like "5' 9 13/16"" -> "5' 9 13/16\""
+        # Remove extra quotes and clean up formatting
+        size = re.sub(r'"+$', '"', size)  # Remove trailing quotes
+        size = re.sub(r'\s+', ' ', size)   # Normalize spaces
+        size = size.strip()
+        
+        return size
     
     def process_pdf_for_measurements(self, pdf_content: bytes) -> List[Dict[str, Any]]:
         """Complete PDF processing pipeline for room measurements"""

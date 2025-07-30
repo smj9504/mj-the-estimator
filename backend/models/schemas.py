@@ -133,3 +133,10 @@ class RoomOpeningResponse(BaseModel):
     room_name: str
     openings: List[Opening]
     updated_measurements: Dict[str, Any]
+
+# Project management schemas
+class ProjectUpdateRequest(BaseModel):
+    project_name: str
+
+class ProjectListResponse(BaseModel):
+    projects: List[PreEstimateSessionResponse]
