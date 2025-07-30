@@ -105,9 +105,37 @@ async def process_measurement_data(
         
         # Process based on file type
         if file_type.lower() == 'image':
-            logger.info("Processing image with OCR")
-            # Use OCR to extract text
-            raw_data = ocr_service.extract_text_from_image(file_content)
+            # Check if it's actually a PDF file
+            if file.filename and file.filename.lower().endswith('.pdf'):
+                logger.info("Processing PDF file directly")
+                from services.pdf_parser_service import pdf_parser_service
+                # Process PDF with dedicated parser
+                locations = pdf_parser_service.process_pdf_for_measurements(file_content)
+                
+                # Save to database
+                insert_id = execute_insert(
+                    """INSERT INTO measurement_data 
+                       (session_id, file_name, file_type, raw_data, parsed_json) 
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (session_id, file.filename, "pdf", f"PDF processed - {len(file_content)} bytes", json.dumps(locations))
+                )
+                
+                # Clean up saved file
+                file_service.cleanup_file(saved_path)
+                
+                # Return processed data directly without AI parsing
+                return {
+                    "id": insert_id,
+                    "session_id": session_id,
+                    "file_name": file.filename,
+                    "file_type": "pdf",
+                    "raw_data": f"PDF processed - {len(file_content)} bytes",
+                    "data": locations
+                }
+            else:
+                logger.info("Processing image with OCR")
+                # Use OCR to extract text
+                raw_data = ocr_service.extract_text_from_image(file_content)
         elif file_type.lower() == 'csv':
             logger.info("Processing CSV file")
             # Process CSV content

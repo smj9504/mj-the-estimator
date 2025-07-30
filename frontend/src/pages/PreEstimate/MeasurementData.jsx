@@ -209,7 +209,7 @@ const MeasurementData = () => {
   };
 
   const acceptedFileTypes = uploadType === 'image' 
-    ? '.jpg,.jpeg,.png,.gif'
+    ? '.jpg,.jpeg,.png,.gif,.pdf'
     : '.csv';
 
   return (
@@ -339,7 +339,7 @@ const MeasurementData = () => {
               onChange={(e) => setUploadType(e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded-md"
             >
-              <option value="image">Image (JPG, PNG)</option>
+              <option value="image">Image/PDF (JPG, PNG, PDF)</option>
               <option value="csv">CSV File</option>
             </select>
           </div>
