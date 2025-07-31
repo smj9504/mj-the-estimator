@@ -53,3 +53,7 @@ credentials.json
 
 # Uploaded files
 backend/uploads/
+
+# Output files
+backend/outputs/
+outputs/

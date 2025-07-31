@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -39,6 +39,22 @@ class WorkScopeResponse(BaseModel):
     parsed_json: Dict[str, Any]
     created_at: datetime
 
+class JobsiteAddress(BaseModel):
+    full_address: Optional[str] = None
+    street: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zipcode: Optional[str] = None
+
+class CompanyInfo(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
 class PreEstimateSessionResponse(BaseModel):
     id: int
     session_id: str
@@ -46,6 +62,9 @@ class PreEstimateSessionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     project_name: Optional[str] = None
+    jobsite: Optional[str] = None
+    occupancy: Optional[str] = None
+    company: Optional[CompanyInfo] = None
 
 class CompletePreEstimateResponse(BaseModel):
     session_id: str
@@ -135,8 +154,78 @@ class RoomOpeningResponse(BaseModel):
     updated_measurements: Dict[str, Any]
 
 # Project management schemas
+class CreateProjectRequest(BaseModel):
+    project_name: Optional[str] = None
+    jobsite: Optional[JobsiteAddress] = None
+    occupancy: Optional[str] = None
+    company: Optional[CompanyInfo] = None
+
 class ProjectUpdateRequest(BaseModel):
-    project_name: str
+    project_name: Optional[str] = None
+    jobsite: Optional[str] = None
+    occupancy: Optional[str] = None
+    company: Optional[CompanyInfo] = None
 
 class ProjectListResponse(BaseModel):
     projects: List[PreEstimateSessionResponse]
+
+# Final Estimate JSON schemas - Updated to match required format
+class FinalOpeningData(BaseModel):
+    type: str  # 'door', 'window', 'missing_wall'
+    size: str  # e.g., "5' X 6' 8\""
+
+class FinalMeasurementData(BaseModel):
+    height: float
+    wall_area_sqft: float
+    ceiling_area_sqft: float
+    floor_area_sqft: float
+    walls_and_ceiling_area_sqft: float
+    flooring_area_sy: float
+    ceiling_perimeter_lf: float
+    floor_perimeter_lf: float
+    openings: List[FinalOpeningData]
+
+class FinalWorkScopeData(BaseModel):
+    use_default: str  # "Y" or "N"
+    work_scope_override: Dict[str, str]
+    protection: List[str]
+    detach_reset: List[str]
+    cleaning: List[str]
+
+class FinalDemoScopeData(BaseModel):
+    ceiling_drywall_sqft: float = Field(alias="Ceiling Drywall(sq_ft)")
+    wall_drywall_sqft: float = Field(alias="Wall Drywall(sq_ft)")
+    
+    class Config:
+        populate_by_name = True
+
+class FinalRoomData(BaseModel):
+    name: str
+    material_override: Dict[str, str]
+    measurements: FinalMeasurementData
+    work_scope: FinalWorkScopeData
+    demo_scope_already_demod: FinalDemoScopeData = Field(alias="demo_scope(already demo'd)")
+    
+    class Config:
+        populate_by_name = True
+
+class FinalLocationData(BaseModel):
+    location: str
+    rooms: List[FinalRoomData]
+
+class FinalDefaultScope(BaseModel):
+    material: Dict[str, str]
+    scope_of_work: Dict[str, str]
+
+class FinalHeaderData(BaseModel):
+    jobsite: str = Field(alias="Jobsite")
+    occupancy: str
+    company: CompanyInfo
+    
+    class Config:
+        populate_by_name = True
+
+class FinalEstimateResponse(BaseModel):
+    success: bool
+    data: List[Any]  # Will contain mixed types: header, default_scope, locations
+    download_url: Optional[str] = None

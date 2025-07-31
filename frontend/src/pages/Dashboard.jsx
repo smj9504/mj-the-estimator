@@ -34,7 +34,11 @@ const Dashboard = () => {
     } catch (error) {
       console.error('Error loading project:', error);
       logger.error('Failed to load project', { error: error.message, sessionId });
-      alert('프로젝트를 불러오는데 실패했습니다.');
+      
+      // 실제 네트워크 에러나 서버 에러일 때만 alert 표시
+      if (error.message !== 'Project not found' && error.status !== 404) {
+        alert('프로젝트를 불러오는데 실패했습니다.');
+      }
       navigate('/projects');
     } finally {
       setIsLoading(false);
@@ -80,12 +84,18 @@ const Dashboard = () => {
     const completedSteps = preEstimateSteps.filter(step => step.completed).length;
     const status = completedSteps === preEstimateSteps.length ? 'completed' : 'in_progress';
 
+    // Check if Material Scope and Demo Scope are completed for demolition JSON
+    const materialScopeCompleted = preEstimateSteps.find(step => step.name === 'Material Scope')?.completed || false;
+    const demoScopeCompleted = preEstimateSteps.find(step => step.name === 'Demo Scope')?.completed || false;
+    const demolitionScopeReady = materialScopeCompleted && demoScopeCompleted;
+
     setEstimates([{
       id: 1,
       name: 'Pre-Estimate',
       status: status,
       lastModified: new Date().toISOString(),
-      steps: preEstimateSteps
+      steps: preEstimateSteps,
+      demolitionScopeReady: demolitionScopeReady
     }]);
   };
 
@@ -179,6 +189,56 @@ const Dashboard = () => {
       return new Date(dateString).toLocaleString('ko-KR');
     } catch {
       return dateString;
+    }
+  };
+
+  const handleDownloadFinalJSON = async () => {
+    try {
+      const response = await api.request(`/api/pre-estimate/final-estimate/${sessionId}`);
+      
+      if (response && response.data && response.data.success) {
+        // Download the file
+        const downloadUrl = `http://localhost:8001${response.data.download_url}`;
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = `final_estimate_${sessionId}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        logger.info('Final JSON downloaded successfully', { sessionId });
+      } else {
+        throw new Error('Failed to generate final JSON');
+      }
+    } catch (error) {
+      console.error('Error downloading final JSON:', error);
+      logger.error('Failed to download final JSON', { error: error.message, sessionId });
+      alert('최종 JSON 다운로드에 실패했습니다. 모든 단계가 완료되었는지 확인해주세요.');
+    }
+  };
+
+  const handleDownloadDemolitionJSON = async () => {
+    try {
+      const response = await api.request(`/api/pre-estimate/demolition-scope/${sessionId}`);
+      
+      if (response && response.data && response.data.success) {
+        // Download the file
+        const downloadUrl = `http://localhost:8001${response.data.download_url}`;
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = `demolition_scope_${sessionId}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        logger.info('Demolition JSON downloaded successfully', { sessionId });
+      } else {
+        throw new Error('Failed to generate demolition JSON');
+      }
+    } catch (error) {
+      console.error('Error downloading demolition JSON:', error);
+      logger.error('Failed to download demolition JSON', { error: error.message, sessionId });
+      alert('Demolition JSON 다운로드에 실패했습니다. Material Scope와 Demo Scope가 완료되었는지 확인해주세요.');
     }
   };
 
@@ -357,6 +417,30 @@ const Dashboard = () => {
                         >
                           계속 작업
                         </button>
+                        {estimate.demolitionScopeReady && (
+                          <button
+                            onClick={handleDownloadDemolitionJSON}
+                            className="px-4 py-2 bg-orange-600 text-black text-sm rounded-md hover:bg-orange-700 transition-colors border border-orange-600 flex items-center space-x-2"
+                            style={{ color: 'black' }}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            <span>Demolition JSON 다운로드</span>
+                          </button>
+                        )}
+                        {estimate.status === 'completed' && (
+                          <button
+                            onClick={handleDownloadFinalJSON}
+                            className="px-4 py-2 bg-green-600 text-black text-sm rounded-md hover:bg-green-700 transition-colors border border-green-600 flex items-center space-x-2"
+                            style={{ color: 'black' }}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            <span>최종 JSON 다운로드</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

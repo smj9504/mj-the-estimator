@@ -22,9 +22,10 @@ const ProjectManagement = () => {
       const response = await fetch('http://localhost:8001/api/pre-estimate/projects');
       const data = await response.json();
       
-      if (response.ok && data && data.projects) {
-        setProjects(data.projects);
-        logger.info('Projects loaded successfully', { count: data.projects.length });
+      if (response.ok && data) {
+        // data.projects가 없거나 빈 배열이어도 정상적인 상황
+        setProjects(data.projects || []);
+        logger.info('Projects loaded successfully', { count: (data.projects || []).length });
       } else {
         throw new Error(`API Error: ${response.status} ${response.statusText}`);
       }
@@ -34,7 +35,12 @@ const ProjectManagement = () => {
         error: error.message, 
         status: error.status
       });
-      alert(`프로젝트 목록을 불러오는데 실패했습니다: ${error.message}`);
+      
+      // 실제 네트워크 에러나 서버 에러일 때만 alert 표시
+      // 빈 데이터나 데이터 없음은 정상적인 상황이므로 alert 표시하지 않음
+      if (error.status !== 404 && !error.message.includes('projects')) {
+        alert(`프로젝트 목록을 불러오는데 실패했습니다: ${error.message}`);
+      }
     } finally {
       setIsLoading(false);
     }

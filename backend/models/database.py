@@ -33,7 +33,20 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             status TEXT DEFAULT 'in_progress',
-            project_name TEXT
+            project_name TEXT,
+            jobsite_full_address TEXT,
+            jobsite_street TEXT,
+            jobsite_city TEXT,
+            jobsite_state TEXT,
+            jobsite_zipcode TEXT,
+            occupancy TEXT,
+            company_name TEXT,
+            company_address TEXT,
+            company_city TEXT,
+            company_state TEXT,
+            company_zip TEXT,
+            company_phone TEXT,
+            company_email TEXT
         )''')
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS measurement_data (
@@ -64,6 +77,27 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES pre_estimate_sessions(session_id)
         )''')
+        
+        # Migrate existing tables - add new jobsite columns if they don't exist
+        try:
+            # Check if old jobsite column exists and new columns don't
+            cursor.execute("PRAGMA table_info(pre_estimate_sessions)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'jobsite' in columns and 'jobsite_full_address' not in columns:
+                # Add new jobsite columns
+                cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN jobsite_full_address TEXT")
+                cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN jobsite_street TEXT")
+                cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN jobsite_city TEXT")
+                cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN jobsite_state TEXT")
+                cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN jobsite_zipcode TEXT")
+                
+                # Migrate existing data
+                cursor.execute("UPDATE pre_estimate_sessions SET jobsite_full_address = jobsite WHERE jobsite IS NOT NULL")
+                
+        except sqlite3.OperationalError:
+            # Columns might already exist, continue
+            pass
         
         # Insert default prompts if not exists
         cursor.execute("INSERT OR IGNORE INTO prompts (step, template) VALUES (?, ?)",

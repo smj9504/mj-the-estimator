@@ -13,12 +13,12 @@ const CreateProject = () => {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
     projectName: '',
-    address: '',
+    street: '',
     city: '',
     state: '',
-    zipCode: '',
-    companyId: '',
-    notes: ''
+    zipcode: '',
+    occupancy: '',
+    companyId: ''
   });
   
   const [addressSuggestions, setAddressSuggestions] = useState([]);
@@ -55,6 +55,18 @@ const CreateProject = () => {
     
     // 회사 정보 로드
     loadCompanies();
+    
+    // 외부 클릭 시 자동완성 드롭다운 닫기
+    const handleClickOutside = (event) => {
+      if (addressInputRef.current && !addressInputRef.current.contains(event.target)) {
+        setShowAddressSuggestions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
 
   const loadCompanies = async () => {
@@ -97,10 +109,10 @@ const CreateProject = () => {
       [name]: value
     }));
 
-    // 주소 입력시 Google Places API 검색
-    if (name === 'address' && value.length > 2) {
+    // Street 주소 입력시 Google Places API 검색
+    if (name === 'street' && value.length > 2) {
       searchAddresses(value);
-    } else if (name === 'address' && value.length <= 2) {
+    } else if (name === 'street' && value.length <= 2) {
       setAddressSuggestions([]);
       setShowAddressSuggestions(false);
     }
@@ -137,9 +149,10 @@ const CreateProject = () => {
 
   const handleAddressSelect = (prediction) => {
     if (!placesService) {
+      // If no Places service, just set the address in street field
       setFormData(prev => ({
         ...prev,
-        address: prediction.description
+        street: prediction.description
       }));
       setShowAddressSuggestions(false);
       return;
@@ -178,20 +191,21 @@ const CreateProject = () => {
           // 선택된 주소로 입력 필드 값을 완전히 교체
           setFormData(prev => ({
             ...prev,
-            address: streetAddress, // 거리 주소만 사용
+            street: streetAddress, // 거리 주소를 street 필드에 저장
             city: city,
             state: state,
-            zipCode: zipCode
+            zipcode: zipCode
           }));
 
           logger.info('Address selected and parsed', {
+            fullAddress: place.formatted_address,
             streetAddress: streetAddress,
             city, state, zipCode
           });
         } else {
           setFormData(prev => ({
             ...prev,
-            address: prediction.description
+            street: prediction.description
           }));
         }
         
@@ -210,16 +224,63 @@ const CreateProject = () => {
       return;
     }
 
+    if (!formData.companyId) {
+      alert('Please select a company');
+      return;
+    }
+
     try {
       setIsLoading(true);
       logger.info('Creating new project', formData);
 
-      // 세션 생성
-      const response = await createSession(formData.projectName);
-      const sessionId = response.data.session_id;
+      // 선택된 회사 정보 가져오기
+      const selectedCompany = companies.find(company => company.id === parseInt(formData.companyId));
+      
+      // 전체 주소 조합
+      const fullAddress = [
+        formData.street,
+        formData.city,
+        formData.state,
+        formData.zipcode
+      ].filter(Boolean).join(', ');
 
-      // 프로젝트 정보를 세션 스토리지에 저장
-      sessionStorage.setItem(`projectInfo_${sessionId}`, JSON.stringify(formData));
+      // 프로젝트 생성 요청 데이터 준비
+      const projectData = {
+        project_name: formData.projectName,
+        jobsite: {
+          full_address: fullAddress,
+          street: formData.street,
+          city: formData.city,
+          state: formData.state,
+          zipcode: formData.zipcode
+        },
+        occupancy: formData.occupancy,
+        company: selectedCompany ? {
+          name: selectedCompany.name,
+          address: selectedCompany.address,
+          city: selectedCompany.city,
+          state: selectedCompany.state,
+          zip: selectedCompany.zip,
+          phone: selectedCompany.phone,
+          email: selectedCompany.email
+        } : null
+      };
+
+      // 세션 생성 (회사 정보 포함)
+      const response = await fetch('http://localhost:8001/api/pre-estimate/session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData)
+      });
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      const sessionId = result.session_id;
 
       logger.info('Project created successfully', { sessionId, projectName: formData.projectName });
 
@@ -274,84 +335,103 @@ const CreateProject = () => {
                     required
                   />
                 </div>
-              </div>
-            </div>
-
-            {/* Property Address */}
-            <div>
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Property Address</h3>
-              <div className="space-y-4">
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Street Address
-                  </label>
-                  <input
-                    ref={addressInputRef}
-                    type="text"
-                    name="address"
-                    value={formData.address}
-                    onChange={handleInputChange}
-                    placeholder="Start typing address..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  
-                  {/* Address Suggestions */}
-                  {showAddressSuggestions && addressSuggestions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-                      {addressSuggestions.map((prediction, index) => (
-                        <div
-                          key={prediction.place_id}
-                          onClick={() => handleAddressSelect(prediction)}
-                          className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                        >
-                          <div className="text-sm text-gray-900">{prediction.structured_formatting.main_text}</div>
-                          <div className="text-xs text-gray-500">{prediction.structured_formatting.secondary_text}</div>
+                
+                {/* Address Component Fields */}
+                <div className="md:col-span-2">
+                  <h4 className="text-md font-medium text-gray-800 mb-3">Address Details</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="md:col-span-2 relative">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Street Address
+                      </label>
+                      <input
+                        type="text"
+                        name="street"
+                        value={formData.street}
+                        onChange={handleInputChange}
+                        placeholder="e.g., 123 Main Street (start typing for suggestions)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        autoComplete="off"
+                      />
+                      
+                      {/* Address Suggestions Dropdown for Street field */}
+                      {showAddressSuggestions && addressSuggestions.length > 0 && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                          {addressSuggestions.map((suggestion, index) => (
+                            <div
+                              key={suggestion.place_id}
+                              className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm"
+                              onClick={() => handleAddressSelect(suggestion)}
+                            >
+                              <div className="font-medium">{suggestion.structured_formatting.main_text}</div>
+                              <div className="text-gray-500 text-xs">{suggestion.structured_formatting.secondary_text}</div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        City
+                      </label>
+                      <input
+                        type="text"
+                        name="city"
+                        value={formData.city}
+                        onChange={handleInputChange}
+                        placeholder="City"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        State
+                      </label>
+                      <input
+                        type="text"
+                        name="state"
+                        value={formData.state}
+                        onChange={handleInputChange}
+                        placeholder="CA"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        ZIP Code
+                      </label>
+                      <input
+                        type="text"
+                        name="zipcode"
+                        value={formData.zipcode}
+                        onChange={handleInputChange}
+                        placeholder="12345"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      City
-                    </label>
-                    <input
-                      type="text"
-                      name="city"
-                      value={formData.city}
-                      onChange={handleInputChange}
-                      placeholder="City"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      State
-                    </label>
-                    <input
-                      type="text"
-                      name="state"
-                      value={formData.state}
-                      onChange={handleInputChange}
-                      placeholder="State"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      ZIP Code
-                    </label>
-                    <input
-                      type="text"
-                      name="zipCode"
-                      value={formData.zipCode}
-                      onChange={handleInputChange}
-                      placeholder="ZIP Code"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Occupancy Status
+                    <span className="text-xs text-gray-500 block font-normal mt-1">
+                      Current occupancy status of the property during reconstruction
+                    </span>
+                  </label>
+                  <select
+                    name="occupancy"
+                    value={formData.occupancy}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select occupancy status...</option>
+                    <option value="Vacant - Unoccupied">Vacant - Unoccupied</option>
+                    <option value="Partially Occupied">Partially Occupied</option>
+                    <option value="Fully Occupied">Fully Occupied</option>
+                    <option value="Owner Occupied">Owner Occupied</option>
+                    <option value="Tenant Occupied">Tenant Occupied</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -395,7 +475,7 @@ const CreateProject = () => {
                 </label>
                 <textarea
                   name="notes"
-                  value={formData.notes}
+                  value={formData.notes || ''}
                   onChange={handleInputChange}
                   rows={4}
                   placeholder="Any additional notes about the project..."
