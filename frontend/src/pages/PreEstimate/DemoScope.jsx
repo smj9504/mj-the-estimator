@@ -36,7 +36,21 @@ const DemoScope = () => {
           // Load existing demo scope data or initialize
           const existingDemoScope = sessionStorage.getItem(`demoScope_${sessionId}`);
           if (existingDemoScope) {
-            setDemoedScope(JSON.parse(existingDemoScope));
+            const parsedDemoScope = JSON.parse(existingDemoScope);
+            
+            // Fix any duplicate IDs in existing surfaces
+            const fixedDemoScope = {};
+            Object.keys(parsedDemoScope).forEach(locationKey => {
+              fixedDemoScope[locationKey] = parsedDemoScope[locationKey].map(room => ({
+                ...room,
+                surfaces: (room.surfaces || []).map(surface => ({
+                  ...surface,
+                  id: surface.id || generateSurfaceId() // Ensure all surfaces have unique IDs
+                }))
+              }));
+            });
+            
+            setDemoedScope(fixedDemoScope);
           } else {
             // Initialize demo'd scope structure
             const initialDemoedScope = {};
@@ -114,6 +128,53 @@ const DemoScope = () => {
     return Array.from(materials).sort();
   };
 
+  // Get material for specific surface type from Material Scope data
+  const getMaterialForSurfaceType = (surfaceType, roomData) => {
+    if (!materialScopeData) return '';
+    
+    // Surface type to material scope mapping
+    const typeMapping = {
+      'floor': 'Floor',
+      'wall': 'wall',
+      'ceiling': 'ceiling',
+      'trim': 'Baseboard', // Use baseboard for general trim
+      'cabinet': 'cabinet', // If defined in material scope
+      'countertop': 'countertop' // If defined in material scope
+    };
+    
+    const materialKey = typeMapping[surfaceType];
+    if (!materialKey) return '';
+    
+    // First, check if this room has material override
+    if (roomData && roomData.use_default_material === 'N') {
+      const overrideMaterial = roomData.material_override?.[materialKey];
+      if (overrideMaterial && overrideMaterial !== 'N/A') {
+        return overrideMaterial;
+      }
+    }
+    
+    // Otherwise, use default material
+    const defaultMaterial = materialScopeData.default_scope?.material?.[materialKey];
+    if (defaultMaterial && defaultMaterial !== 'N/A') {
+      return defaultMaterial;
+    }
+    
+    return '';
+  };
+
+  // Get current room's material data
+  const getCurrentRoomMaterialData = () => {
+    if (!selectedRoom || !materialScopeData?.locations) return null;
+    
+    const locationData = materialScopeData.locations[selectedRoom.locationIndex];
+    return locationData?.rooms[selectedRoom.roomIndex] || null;
+  };
+
+  // Generate unique ID for surfaces
+  const generateSurfaceId = () => {
+    return `surface_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  };
+
   // Add surface to demo'd scope
   const addDemoedSurface = (locationName, roomIndex) => {
     setDemoedScope(prev => {
@@ -125,11 +186,17 @@ const DemoScope = () => {
         newScope[locationName][roomIndex].surfaces = [];
       }
       
+      // Get current room's material data
+      const roomMaterialData = getCurrentRoomMaterialData();
+      
+      // Get auto-filled material for default surface type (floor)
+      const autoMaterial = getMaterialForSurfaceType('floor', roomMaterialData);
+      
       const newSurface = {
-        id: Date.now(),
+        id: generateSurfaceId(), // Use unique ID generator
         type: 'floor',
         name: '',
-        material: '',
+        material: autoMaterial, // Auto-fill material from Material Scope
         area_sqft: 0.00
       };
       
@@ -155,7 +222,7 @@ const DemoScope = () => {
       
       const surface = newScope[locationName][roomIndex].surfaces[surfaceIndex];
       
-      // If changing surface type, handle insulation field
+      // If changing surface type, handle insulation field and auto-fill material
       if (field === 'type') {
         const needsInsulation = surfaceTypesWithInsulation.includes(value);
         const hasInsulation = 'insulation_sqft' in surface;
@@ -164,6 +231,13 @@ const DemoScope = () => {
           surface.insulation_sqft = 0.00;
         } else if (!needsInsulation && hasInsulation) {
           delete surface.insulation_sqft;
+        }
+        
+        // Auto-fill material from Material Scope when surface type changes
+        const roomMaterialData = getCurrentRoomMaterialData();
+        const autoMaterial = getMaterialForSurfaceType(value, roomMaterialData);
+        if (autoMaterial) {
+          surface.material = autoMaterial;
         }
       }
       
@@ -413,6 +487,18 @@ const DemoScope = () => {
                                   <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
                                       Material
+                                      {(() => {
+                                        // Check if this material comes from Material Scope
+                                        const roomMaterialData = getCurrentRoomMaterialData();
+                                        const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
+                                        const isAutoFilled = autoMaterial && surface.material === autoMaterial;
+                                        
+                                        return isAutoFilled ? (
+                                          <span className="ml-2 text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
+                                            From Material Scope
+                                          </span>
+                                        ) : null;
+                                      })()}
                                     </label>
                                     <div className="relative">
                                       <input
@@ -420,7 +506,16 @@ const DemoScope = () => {
                                         list={`materials-${surface.id}`}
                                         value={surface.material || ''}
                                         onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'material', e.target.value)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                                        className={`w-full px-3 py-2 border rounded-md text-sm ${
+                                          (() => {
+                                            const roomMaterialData = getCurrentRoomMaterialData();
+                                            const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
+                                            const isAutoFilled = autoMaterial && surface.material === autoMaterial;
+                                            return isAutoFilled 
+                                              ? 'border-blue-300 bg-blue-50' 
+                                              : 'border-gray-300';
+                                          })()
+                                        }`}
                                         placeholder="Select or type material"
                                       />
                                       <datalist id={`materials-${surface.id}`}>
@@ -428,7 +523,48 @@ const DemoScope = () => {
                                           <option key={material} value={material} />
                                         ))}
                                       </datalist>
+                                      {(() => {
+                                        // Show refresh button to re-apply material from Material Scope
+                                        const roomMaterialData = getCurrentRoomMaterialData();
+                                        const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
+                                        
+                                        return autoMaterial && surface.material !== autoMaterial ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => updateDemoedSurface(locationName, roomIndex, surface.id, 'material', autoMaterial)}
+                                            className="absolute right-2 top-1/2 transform -translate-y-1/2 text-blue-600 hover:text-blue-800 p-1"
+                                            title={`Apply material from Material Scope: ${autoMaterial}`}
+                                          >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                            </svg>
+                                          </button>
+                                        ) : null;
+                                      })()}
                                     </div>
+                                    {(() => {
+                                      // Show helper text for auto-filled materials
+                                      const roomMaterialData = getCurrentRoomMaterialData();
+                                      const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
+                                      const isAutoFilled = autoMaterial && surface.material === autoMaterial;
+                                      
+                                      return isAutoFilled ? (
+                                        <p className="text-xs text-blue-600 mt-1">
+                                          This material was automatically filled from your Material Scope configuration.
+                                        </p>
+                                      ) : autoMaterial && surface.material !== autoMaterial ? (
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          Available from Material Scope: <span className="font-medium text-blue-600">{autoMaterial}</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => updateDemoedSurface(locationName, roomIndex, surface.id, 'material', autoMaterial)}
+                                            className="ml-2 text-blue-600 hover:text-blue-800 underline"
+                                          >
+                                            Apply
+                                          </button>
+                                        </p>
+                                      ) : null;
+                                    })()}
                                   </div>
                                   
                                   {/* Area */}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { uploadMeasurementFile, createSession, getSession } from '../../utils/api';
+import { buildApiUrl, API_CONFIG } from '../../config/api';
 import logger from '../../utils/logger';
 import styles from './MeasurementData.module.css';
 
@@ -21,6 +22,16 @@ const MeasurementData = () => {
   const [copyStatus, setCopyStatus] = useState('idle'); // 'idle', 'success', 'error'
   const [editMode, setEditMode] = useState(false);
   const [editableData, setEditableData] = useState(null);
+  const [editingOpening, setEditingOpening] = useState(null); // { locationIndex, roomIndex, openingIndex } or null
+  
+  // Progress tracking states
+  const [processingProgress, setProcessingProgress] = useState({
+    stage: 'idle',
+    message: '',
+    progress: 0,
+    timestamp: null
+  });
+  const [showProgress, setShowProgress] = useState(false);
 
   // Remove automatic session creation on page load
 
@@ -59,6 +70,56 @@ const MeasurementData = () => {
     }
   }, [sessionId, pendingFileProcess, file]);
 
+  // Helper functions for enhanced progress display
+  const getStageMessage = (stage, message) => {
+    if (message) return message;
+    
+    const stageMessages = {
+      'initializing': 'Setting up processing pipeline...',
+      'parsing': 'Analyzing measurement data format...',
+      'calculating': 'Computing room measurements...',
+      'finalizing': 'Organizing room data structures...',
+      'completed': 'All measurements processed successfully!',
+      'error': 'Processing encountered an error',
+      'fallback': 'Using alternative processing method...'
+    };
+    
+    return stageMessages[stage] || 'Processing your measurement file...';
+  };
+
+  const getStageDescription = (stage) => {
+    const descriptions = {
+      'initializing': 'Preparing to analyze your measurement data',
+      'parsing': 'Detecting room data format and extracting information',
+      'calculating': 'Computing area, perimeter, and opening measurements',
+      'finalizing': 'Structuring data for room-by-room analysis',
+      'completed': 'Ready to proceed to opening verification',
+      'error': 'Check file format and try again',
+      'fallback': 'Attempting backup processing method'
+    };
+    
+    return descriptions[stage] || 'Please wait while we process your file';
+  };
+
+  const getStageDisplayName = (stage) => {
+    const displayNames = {
+      'initializing': 'Initializing',
+      'parsing': 'Parsing Data',
+      'calculating': 'Calculating',
+      'finalizing': 'Finalizing',
+      'completed': 'Complete',
+      'error': 'Error',
+      'fallback': 'Retry Mode'
+    };
+    
+    return displayNames[stage] || stage;
+  };
+
+  const getStageIndex = (stage) => {
+    const stages = ['initializing', 'parsing', 'calculating', 'finalizing'];
+    return stages.indexOf(stage);
+  };
+
   const fetchSessionData = async (currentSessionId) => {
     try {
       const response = await getSession(currentSessionId);
@@ -85,6 +146,69 @@ const MeasurementData = () => {
       setError('Failed to create session. Please try again.');
     } finally {
       setSessionLoading(false);
+    }
+  };
+
+  // Progress tracking functions
+  const fetchProgress = async (sessionId) => {
+    try {
+      const response = await fetch(buildApiUrl(`${API_CONFIG.ENDPOINTS.PRE_ESTIMATE.MEASUREMENT_PROGRESS}/${sessionId}`));
+      if (response.ok) {
+        const progressData = await response.json();
+        setProcessingProgress(progressData);
+        return progressData;
+      }
+    } catch (error) {
+      logger.error('Error fetching progress', error);
+    }
+    return null;
+  };
+
+  const startProgressPolling = (sessionId) => {
+    setShowProgress(true);
+    setProcessingProgress({
+      stage: 'initializing',
+      message: 'Starting measurement data processing...',
+      progress: 5,
+      timestamp: Date.now()
+    });
+
+    const pollInterval = setInterval(async () => {
+      const progressData = await fetchProgress(sessionId);
+      
+      if (progressData) {
+        setProcessingProgress(progressData);
+        
+        if (progressData.stage === 'completed') {
+          clearInterval(pollInterval);
+          setTimeout(() => {
+            setShowProgress(false);
+          }, 3000); // Show completion for 3 seconds
+        } else if (progressData.stage === 'error') {
+          clearInterval(pollInterval);
+          // Don't auto-hide on error, let user see the error message
+        }
+      }
+    }, 500); // Poll every 500ms for smoother updates
+
+    // Cleanup after 60 seconds to prevent infinite polling
+    setTimeout(() => {
+      clearInterval(pollInterval);
+      if (showProgress) {
+        setShowProgress(false);
+      }
+    }, 60000);
+
+    return pollInterval;
+  };
+
+  const clearProgress = async (sessionId) => {
+    try {
+      await fetch(buildApiUrl(`${API_CONFIG.ENDPOINTS.PRE_ESTIMATE.MEASUREMENT_PROGRESS}/${sessionId}`), {
+        method: 'DELETE'
+      });
+    } catch (error) {
+      logger.error('Error clearing progress', error);
     }
   };
 
@@ -127,6 +251,9 @@ const MeasurementData = () => {
     setError(null);
     logger.info('Starting file processing', { fileName: file.name, uploadType, sessionId: currentSessionId });
 
+    // Start progress polling
+    const pollInterval = startProgressPolling(currentSessionId);
+
     try {
       const result = await uploadMeasurementFile(file, uploadType, currentSessionId);
       
@@ -135,6 +262,14 @@ const MeasurementData = () => {
       
       // Store measurement data in session storage for other components
       sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(result.data.data));
+      
+      // Dispatch custom event for same-window components to detect the change
+      window.dispatchEvent(new CustomEvent('customStorageChange', {
+        detail: {
+          key: `measurementData_${sessionId}`,
+          newValue: JSON.stringify(result.data.data)
+        }
+      }));
       
       logger.info('File processed successfully', { 
         fileName: file.name,
@@ -194,8 +329,27 @@ const MeasurementData = () => {
       setParsedData(mockData);
       setEditableData(JSON.parse(JSON.stringify(mockData))); // Deep copy
       sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(mockData));
+      
+      // Dispatch custom event for same-window components to detect the change
+      window.dispatchEvent(new CustomEvent('customStorageChange', {
+        detail: {
+          key: `measurementData_${sessionId}`,
+          newValue: JSON.stringify(mockData)
+        }
+      }));
     } finally {
       setIsProcessing(false);
+      
+      // Clean up progress polling and clear progress data
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+      
+      // Clear progress data from backend after a short delay
+      setTimeout(async () => {
+        await clearProgress(currentSessionId);
+        setShowProgress(false);
+      }, 3000);
     }
   };
 
@@ -302,6 +456,127 @@ const MeasurementData = () => {
     setEditableData(newData);
   };
 
+  const updateRoomClassification = (locationIndex, roomIndex, field, value) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    if (newData[locationIndex] && newData[locationIndex].rooms[roomIndex]) {
+      if (!newData[locationIndex].rooms[roomIndex].room_classification) {
+        newData[locationIndex].rooms[roomIndex].room_classification = {};
+      }
+      newData[locationIndex].rooms[roomIndex].room_classification[field] = value;
+      
+      // Auto-update related fields based on sub_area_type
+      if (field === 'sub_area_type') {
+        const nonMaterialTypes = ['bathtub', 'cabinet', 'fixture'];
+        newData[locationIndex].rooms[roomIndex].room_classification.is_sub_area = value !== null;
+        newData[locationIndex].rooms[roomIndex].room_classification.material_applicable = 
+          value === null || !nonMaterialTypes.includes(value);
+      }
+      
+      // Mark as user confirmed
+      newData[locationIndex].rooms[roomIndex].room_classification.user_confirmed = true;
+    }
+    setEditableData(newData);
+  };
+
+  const mergeRoomsAsSubArea = (locationIndex, parentRoomIndex, subAreaRoomIndex) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const location = newData[locationIndex];
+    
+    if (location && location.rooms[parentRoomIndex] && location.rooms[subAreaRoomIndex]) {
+      const parentRoom = location.rooms[parentRoomIndex];
+      const subAreaRoom = location.rooms[subAreaRoomIndex];
+      
+      // Convert to merged room structure - optimized with only essential fields
+      const mergedRoom = {
+        name: parentRoom.name.replace(/ #\d+$/, ''), // Remove numbering
+        is_merged: true,
+        main_area: {
+          measurements: { ...parentRoom.measurements }
+        },
+        sub_areas: [
+          {
+            type: subAreaRoom.room_classification?.sub_area_type || 'sub_area',
+            measurements: { 
+              ...subAreaRoom.measurements,
+              // Filter openings based on sub-area type validity
+              openings: filterOpeningsForSubArea(
+                subAreaRoom.measurements.openings || [], 
+                subAreaRoom.room_classification?.sub_area_type
+              )
+            },
+            material_applicable: subAreaRoom.room_classification?.material_applicable !== false
+          }
+        ],
+        total_measurements: {
+          height: Math.max(parentRoom.measurements.height || 0, subAreaRoom.measurements.height || 0),
+          wall_area_sqft: (parentRoom.measurements.wall_area_sqft || 0) + (subAreaRoom.measurements.wall_area_sqft || 0),
+          ceiling_area_sqft: (parentRoom.measurements.ceiling_area_sqft || 0) + (subAreaRoom.measurements.ceiling_area_sqft || 0),
+          floor_area_sqft: (parentRoom.measurements.floor_area_sqft || 0) + (subAreaRoom.measurements.floor_area_sqft || 0),
+          walls_and_ceiling_area_sqft: (parentRoom.measurements.walls_and_ceiling_area_sqft || 0) + (subAreaRoom.measurements.walls_and_ceiling_area_sqft || 0),
+          flooring_area_sy: (parentRoom.measurements.flooring_area_sy || 0) + (subAreaRoom.measurements.flooring_area_sy || 0),
+          ceiling_perimeter_lf: Math.max(parentRoom.measurements.ceiling_perimeter_lf || 0, subAreaRoom.measurements.ceiling_perimeter_lf || 0),
+          floor_perimeter_lf: Math.max(parentRoom.measurements.floor_perimeter_lf || 0, subAreaRoom.measurements.floor_perimeter_lf || 0),
+          openings: mergeOpenings(
+            parentRoom.measurements.openings || [], 
+            subAreaRoom.measurements.openings || [], 
+            parentRoom.name, 
+            subAreaRoom.name
+          )
+        }
+      };
+
+      // Remove the room that comes later first to avoid index shifting issues
+      if (subAreaRoomIndex > parentRoomIndex) {
+        // Sub-area comes after parent: remove sub-area first, then replace parent
+        location.rooms.splice(subAreaRoomIndex, 1);
+        location.rooms[parentRoomIndex] = mergedRoom;
+      } else {
+        // Sub-area comes before parent: replace parent first, then remove sub-area
+        location.rooms[parentRoomIndex] = mergedRoom;
+        location.rooms.splice(subAreaRoomIndex, 1);
+      }
+    }
+    
+    setEditableData(newData);
+  };
+
+  const unmergeRoom = (locationIndex, roomIndex) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const location = newData[locationIndex];
+    const mergedRoom = location.rooms[roomIndex];
+    
+    if (mergedRoom && mergedRoom.is_merged) {
+      // Create separate rooms from merged data
+      const rooms = [];
+      
+      // Main area room
+      rooms.push({
+        name: `${mergedRoom.name} #1`,
+        measurements: { ...mergedRoom.main_area.measurements }
+      });
+      
+      // Sub-area rooms
+      mergedRoom.sub_areas.forEach((subArea, index) => {
+        rooms.push({
+          name: `${mergedRoom.name} #${index + 2}`,
+          measurements: { ...subArea.measurements },
+          room_classification: {
+            ...subArea.original_room_classification,
+            sub_area_type: subArea.type,
+            is_sub_area: true,
+            material_applicable: subArea.material_applicable,
+            user_confirmed: true
+          }
+        });
+      });
+      
+      // Replace merged room with separate rooms
+      location.rooms.splice(roomIndex, 1, ...rooms);
+    }
+    
+    setEditableData(newData);
+  };
+
   const mergeRooms = (locationIndex, roomIndex1, roomIndex2) => {
     const newData = JSON.parse(JSON.stringify(editableData));
     const location = newData[locationIndex];
@@ -310,29 +585,47 @@ const MeasurementData = () => {
       const room1 = location.rooms[roomIndex1];
       const room2 = location.rooms[roomIndex2];
       
-      // Merge measurements by adding numeric values
-      const mergedMeasurements = {
-        wall_area_sqft: (room1.measurements.wall_area_sqft || 0) + (room2.measurements.wall_area_sqft || 0),
-        ceiling_area_sqft: (room1.measurements.ceiling_area_sqft || 0) + (room2.measurements.ceiling_area_sqft || 0),
-        floor_area_sqft: (room1.measurements.floor_area_sqft || 0) + (room2.measurements.floor_area_sqft || 0),
-        walls_and_ceiling_area_sqft: (room1.measurements.walls_and_ceiling_area_sqft || 0) + (room2.measurements.walls_and_ceiling_area_sqft || 0),
-        floor_perimeter_lf: (room1.measurements.floor_perimeter_lf || 0) + (room2.measurements.floor_perimeter_lf || 0),
-        ceiling_perimeter_lf: (room1.measurements.ceiling_perimeter_lf || 0) + (room2.measurements.ceiling_perimeter_lf || 0),
-        flooring_area_sy: ((room1.measurements.floor_area_sqft || 0) + (room2.measurements.floor_area_sqft || 0)) / 9.0,
-        height: Math.max(room1.measurements.height || 0, room2.measurements.height || 0), // Use the higher height
-        openings: mergeOpenings(
-          room1.measurements.openings || [], 
-          room2.measurements.openings || [], 
-          room1.name, 
-          room2.name
-        )
-      };
+      // Check if one is a sub-area
+      const room1IsSubArea = room1.room_classification?.is_sub_area;
+      const room2IsSubArea = room2.room_classification?.is_sub_area;
       
-      // Update the first room with merged data
-      location.rooms[roomIndex1].measurements = mergedMeasurements;
-      
-      // Remove the second room
-      location.rooms.splice(roomIndex2, 1);
+      if (room1IsSubArea && !room2IsSubArea) {
+        mergeRoomsAsSubArea(locationIndex, roomIndex2, roomIndex1);
+      } else if (room2IsSubArea && !room1IsSubArea) {
+        mergeRoomsAsSubArea(locationIndex, roomIndex1, roomIndex2); 
+      } else {
+        // Legacy merge for same-name rooms
+        console.log('Performing legacy merge for:', room1.name, 'and', room2.name);
+        
+        const mergedMeasurements = {
+          wall_area_sqft: (room1.measurements.wall_area_sqft || 0) + (room2.measurements.wall_area_sqft || 0),
+          ceiling_area_sqft: (room1.measurements.ceiling_area_sqft || 0) + (room2.measurements.ceiling_area_sqft || 0),
+          floor_area_sqft: (room1.measurements.floor_area_sqft || 0) + (room2.measurements.floor_area_sqft || 0),
+          walls_and_ceiling_area_sqft: (room1.measurements.walls_and_ceiling_area_sqft || 0) + (room2.measurements.walls_and_ceiling_area_sqft || 0),
+          floor_perimeter_lf: (room1.measurements.floor_perimeter_lf || 0) + (room2.measurements.floor_perimeter_lf || 0),
+          ceiling_perimeter_lf: (room1.measurements.ceiling_perimeter_lf || 0) + (room2.measurements.ceiling_perimeter_lf || 0),
+          flooring_area_sy: ((room1.measurements.floor_area_sqft || 0) + (room2.measurements.floor_area_sqft || 0)) / 9.0,
+          height: Math.max(room1.measurements.height || 0, room2.measurements.height || 0),
+          openings: mergeOpenings(
+            room1.measurements.openings || [], 
+            room2.measurements.openings || [], 
+            room1.name, 
+            room2.name
+          )
+        };
+        
+        // Update first room and remove second room
+        room1.measurements = mergedMeasurements;
+        room1.name = room1.name.replace(/ #\d+$/, ''); // Remove numbering
+        
+        // Remove the second room (adjust index based on position)
+        if (roomIndex2 > roomIndex1) {
+          location.rooms.splice(roomIndex2, 1);
+        } else {
+          location.rooms.splice(roomIndex2, 1);
+          // No need to adjust roomIndex1 since we already updated room1
+        }
+      }
     }
     
     setEditableData(newData);
@@ -419,9 +712,193 @@ const MeasurementData = () => {
     return opensToBase.toLowerCase() === internalBase.toLowerCase();
   };
 
+  // Define valid opening types for each sub-area type
+  const getValidOpeningsForSubArea = (subAreaType) => {
+    const openingRules = {
+      // Areas that can have doors/windows (accessible spaces)
+      'closet': ['door'], // Closets have doors but typically no windows
+      'pantry': ['door'], // Pantries have doors but typically no windows
+      'alcove': ['window'], // Alcoves might have windows but no separate doors
+      'walk_in_shower': [], // Walk-in showers are open, no doors/windows in the shower area itself
+      'walk-in shower': [], // Same as above
+      
+      // Areas that typically don't have openings (fixtures/built-ins)
+      'bathtub': [], // Bathtubs don't have doors or windows
+      'shower_booth': [], // Shower booths are enclosed but don't have separate doors/windows
+      'shower booth': [], // Same as above
+      'cabinet': [], // Cabinets don't have doors/windows to outside
+      'fixture': [], // Other fixtures don't have openings
+      
+      // Custom types - default to allowing doors and windows
+      'default': ['door', 'window', 'open_wall']
+    };
+    
+    return openingRules[subAreaType?.toLowerCase()] || openingRules['default'];
+  };
+
+  // Filter openings based on sub-area type validity
+  const filterOpeningsForSubArea = (openings, subAreaType) => {
+    if (!openings || !Array.isArray(openings) || !subAreaType) {
+      return openings || [];
+    }
+    
+    const validOpeningTypes = getValidOpeningsForSubArea(subAreaType);
+    
+    // If no openings are valid for this sub-area type, return empty array
+    if (validOpeningTypes.length === 0) {
+      return [];
+    }
+    
+    // Filter openings to only include valid types
+    const filteredOpenings = openings.filter(opening => {
+      return validOpeningTypes.includes(opening.type);
+    });
+    
+    return filteredOpenings;
+  };
+
+  // Validate and clean openings when sub-area type changes
+  const validateSubAreaOpenings = (room, subAreaType) => {
+    if (!room.measurements?.openings || !subAreaType) {
+      return room;
+    }
+    
+    const validOpenings = filterOpeningsForSubArea(room.measurements.openings, subAreaType);
+    const removedCount = room.measurements.openings.length - validOpenings.length;
+    
+    if (removedCount > 0) {
+      const removedOpenings = room.measurements.openings.filter(opening => 
+        !validOpenings.some(valid => valid.type === opening.type && valid.size === opening.size)
+      );
+      
+      // Ask user if they want to keep the invalid openings
+      const keepInvalidOpenings = confirm(
+        `Sub-area type "${subAreaType}" configured.\n\n${removedCount} opening(s) are typically not valid for this sub-area type:\n${removedOpenings.map(o => `• ${o.type} (${o.size})`).join('\n')}\n\nDo you want to keep these openings anyway?\n\nClick OK to KEEP all openings\nClick Cancel to REMOVE invalid openings`
+      );
+      
+      if (keepInvalidOpenings) {
+        // User wants to keep all openings - return original room
+        setTimeout(() => {
+          alert(`All openings kept for "${subAreaType}" sub-area.\n\nNote: Some openings may be marked as unusual for this sub-area type but will be preserved.`);
+        }, 100);
+        return room;
+      } else {
+        // User wants to remove invalid openings
+        const updatedRoom = { ...room };
+        updatedRoom.measurements = { ...room.measurements };
+        updatedRoom.measurements.openings = validOpenings;
+        
+        setTimeout(() => {
+          alert(`${removedCount} opening(s) removed for "${subAreaType}" sub-area.\n\nRemaining openings: ${validOpenings.length}\n\nYou can add them back manually if needed using Edit mode.`);
+        }, 100);
+        
+        return updatedRoom;
+      }
+    }
+    
+    return room;
+  };
+
+  // Opening editing functions - support both merged and regular rooms
+  const getOpeningsArray = (room) => {
+    // For merged rooms, use main_area.measurements.openings
+    if (room.is_merged && room.main_area?.measurements?.openings) {
+      return room.main_area.measurements.openings;
+    }
+    // For regular rooms, use measurements.openings
+    return room.measurements?.openings || [];
+  };
+
+  const updateOpening = (locationIndex, roomIndex, openingIndex, field, value) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const room = newData[locationIndex]?.rooms[roomIndex];
+    
+    if (room) {
+      // Determine which openings array to use
+      let openingsArray;
+      if (room.is_merged && room.main_area?.measurements) {
+        if (!room.main_area.measurements.openings) {
+          room.main_area.measurements.openings = [];
+        }
+        openingsArray = room.main_area.measurements.openings;
+      } else {
+        if (!room.measurements) room.measurements = {};
+        if (!room.measurements.openings) {
+          room.measurements.openings = [];
+        }
+        openingsArray = room.measurements.openings;
+      }
+      
+      const opening = openingsArray[openingIndex];
+      if (opening) {
+        opening[field] = value;
+        setEditableData(newData);
+      }
+    }
+  };
+
+  const addOpening = (locationIndex, roomIndex) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const room = newData[locationIndex]?.rooms[roomIndex];
+    
+    if (room) {
+      const newOpening = {
+        type: 'door',
+        size: '3\' X 6\'8"',
+        opens_to: ''
+      };
+      
+      // Determine which openings array to use
+      if (room.is_merged && room.main_area?.measurements) {
+        if (!room.main_area.measurements.openings) {
+          room.main_area.measurements.openings = [];
+        }
+        room.main_area.measurements.openings.push(newOpening);
+      } else {
+        if (!room.measurements) room.measurements = {};
+        if (!room.measurements.openings) {
+          room.measurements.openings = [];
+        }
+        room.measurements.openings.push(newOpening);
+      }
+      
+      setEditableData(newData);
+    }
+  };
+
+  const removeOpening = (locationIndex, roomIndex, openingIndex) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const room = newData[locationIndex]?.rooms[roomIndex];
+    
+    if (room) {
+      // Determine which openings array to use
+      let openingsArray;
+      if (room.is_merged && room.main_area?.measurements?.openings) {
+        openingsArray = room.main_area.measurements.openings;
+      } else if (room.measurements?.openings) {
+        openingsArray = room.measurements.openings;
+      }
+      
+      if (openingsArray && openingsArray[openingIndex]) {
+        openingsArray.splice(openingIndex, 1);
+        setEditableData(newData);
+        setEditingOpening(null); // Close editor if we're editing this opening
+      }
+    }
+  };
+
   const saveChanges = () => {
     setParsedData(JSON.parse(JSON.stringify(editableData)));
     sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(editableData));
+    
+    // Dispatch custom event for same-window components to detect the change
+    window.dispatchEvent(new CustomEvent('customStorageChange', {
+      detail: {
+        key: `measurementData_${sessionId}`,
+        newValue: JSON.stringify(editableData)
+      }
+    }));
+    
     setEditMode(false);
     logger.info('Room changes saved', { sessionId, totalRooms: editableData?.reduce((total, loc) => total + (loc.rooms?.length || 0), 0) });
   };
@@ -484,6 +961,153 @@ const MeasurementData = () => {
           </div>
         </div>
       </div>
+
+      {/* Enhanced Progress Modal */}
+      {showProgress && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 relative overflow-hidden">
+            {/* Animated background gradient */}
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-purple-50 opacity-60"></div>
+            
+            <div className="relative z-10">
+              <div className="text-center">
+                {/* Enhanced animated icon */}
+                <div className="mb-6 relative">
+                  <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mb-4 shadow-lg">
+                    {processingProgress.stage === 'completed' ? (
+                      <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : processingProgress.stage === 'error' ? (
+                      <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    ) : (
+                      <svg className="w-10 h-10 text-white animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    )}
+                  </div>
+                  
+                  {/* Pulsing rings animation */}
+                  {processingProgress.stage !== 'completed' && processingProgress.stage !== 'error' && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-24 h-24 border-2 border-blue-300 rounded-full animate-ping opacity-75"></div>
+                      <div className="w-28 h-28 border-2 border-purple-300 rounded-full animate-ping opacity-50 absolute" style={{ animationDelay: '0.5s' }}></div>
+                    </div>
+                  )}
+                </div>
+                
+                <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  {processingProgress.stage === 'completed' ? 'Processing Complete!' :
+                   processingProgress.stage === 'error' ? 'Processing Failed' :
+                   'Processing Measurement Data'}
+                </h3>
+                
+                {/* Enhanced progress message with stage-specific content */}
+                <div className="mb-6">
+                  <p className="text-sm text-gray-700 mb-2 font-medium">
+                    {getStageMessage(processingProgress.stage, processingProgress.message)}
+                  </p>
+                  
+                  {/* Detailed stage description */}
+                  <p className="text-xs text-gray-500">
+                    {getStageDescription(processingProgress.stage)}
+                  </p>
+                </div>
+                
+                {/* Enhanced Progress Bar */}
+                <div className="mb-4">
+                  <div className="w-full bg-gray-200 rounded-full h-3 mb-2 shadow-inner">
+                    <div 
+                      className={`h-3 rounded-full transition-all duration-500 ease-out relative ${
+                        processingProgress.stage === 'completed' ? 'bg-gradient-to-r from-green-500 to-green-600' :
+                        processingProgress.stage === 'error' ? 'bg-gradient-to-r from-red-500 to-red-600' :
+                        'bg-gradient-to-r from-blue-500 to-purple-600'
+                      }`}
+                      style={{ width: `${processingProgress.progress}%` }}
+                    >
+                      {/* Animated shine effect */}
+                      {processingProgress.progress > 0 && processingProgress.stage !== 'completed' && (
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-30 animate-pulse rounded-full"></div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="capitalize font-medium text-gray-700">
+                      {getStageDisplayName(processingProgress.stage)}
+                    </span>
+                    <span className="font-bold text-gray-900">{processingProgress.progress}%</span>
+                  </div>
+                </div>
+                
+                {/* Status-specific content */}
+                {processingProgress.stage === 'error' && (
+                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-start space-x-2">
+                      <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div>
+                        <p className="text-sm font-medium text-red-800">Processing Failed</p>
+                        <p className="text-xs text-red-600 mt-1">
+                          Please try again or contact support if the issue persists.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {processingProgress.stage === 'completed' && (
+                  <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center justify-center space-x-2">
+                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <p className="text-sm font-medium text-green-800">
+                        Measurement data processed successfully!
+                      </p>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Processing stages indicator */}
+                {processingProgress.stage !== 'completed' && processingProgress.stage !== 'error' && (
+                  <div className="mt-6 pt-4 border-t border-gray-200">
+                    <div className="flex justify-between items-center text-xs text-gray-500">
+                      {['initializing', 'parsing', 'calculating', 'finalizing'].map((stage, index) => (
+                        <div key={stage} className="flex flex-col items-center space-y-1">
+                          <div className={`w-3 h-3 rounded-full transition-all duration-300 ${
+                            getStageIndex(processingProgress.stage) > index ? 'bg-blue-500 scale-110' :
+                            getStageIndex(processingProgress.stage) === index ? 'bg-blue-500 animate-pulse scale-110' :
+                            'bg-gray-300'
+                          }`}></div>
+                          <span className={`capitalize transition-colors duration-300 ${
+                            getStageIndex(processingProgress.stage) >= index ? 'text-blue-600 font-medium' : 'text-gray-400'
+                          }`}>{getStageDisplayName(stage)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* File info */}
+                {file && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="flex items-center justify-center space-x-2 text-xs text-gray-500">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span>Processing: {file.name}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <div className={styles.mainContent}>
@@ -751,31 +1375,37 @@ const MeasurementData = () => {
           {/* Room Summary View */}
           <div className="space-y-4">
             {(editMode ? editableData : parsedData)?.map((location, locationIndex) => (
-              <div key={locationIndex} className="border border-gray-200 rounded-md overflow-hidden">
+              <div key={locationIndex} className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
                 <div className="bg-gray-50 px-6 py-3 border-b border-gray-200">
                   <h4 className="font-medium text-gray-900">{location.location}</h4>
                 </div>
-                <div className="bg-white">
-                  <table className="min-w-full divide-y divide-gray-200">
+                {/* Table container with improved layout */}
+                <div className="bg-white overflow-x-auto">
+                  <table className="w-full divide-y divide-gray-200 table-fixed">
                     <thead className="bg-gray-50">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: editMode ? '18%' : '22%'}}>
                           Room
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {editMode && (
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: '16%'}}>
+                            Type
+                          </th>
+                        )}
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: editMode ? '12%' : '15%'}}>
                           Floor Area
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: editMode ? '12%' : '15%'}}>
                           Wall Area
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: editMode ? '8%' : '10%'}}>
                           Height
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: editMode ? '22%' : '38%'}}>
                           Openings
                         </th>
                         {editMode && (
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider" style={{width: '12%'}}>
                             Actions
                           </th>
                         )}
@@ -789,75 +1419,487 @@ const MeasurementData = () => {
                         
                         return (
                           <tr key={roomIndex} className={editMode && (isEmpty || hasDuplicate) ? 'bg-yellow-50' : ''}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            <td className="px-6 py-3 text-sm font-medium text-gray-900">
                               {editMode ? (
                                 <div className="space-y-1">
-                                  <input
-                                    type="text"
-                                    value={room.name || ''}
-                                    onChange={(e) => updateRoomName(locationIndex, roomIndex, e.target.value)}
-                                    className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    placeholder="Enter room name"
-                                  />
-                                  {isEmpty && (
-                                    <div className="text-xs text-red-600">⚠️ Empty name</div>
-                                  )}
-                                  {hasDuplicate && (
-                                    <div className="text-xs text-orange-600">⚠️ Duplicate name</div>
+                                  {(room.is_merged || room.room_classification?.is_merged_room) ? (
+                                    <div className="space-y-2">
+                                      <div className="flex items-center space-x-2">
+                                        <span className="font-medium text-green-800">{room.name}</span>
+                                        <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                                          Merged Room
+                                        </span>
+                                      </div>
+                                      
+                                      {/* New structure with detailed area information */}
+                                      {room.room_classification?.composition ? (
+                                        <div className="text-xs text-gray-700 space-y-1 bg-gray-50 p-2 rounded border">
+                                          <div className="font-medium text-blue-800">
+                                            Room Composition:
+                                          </div>
+                                          <div className="flex justify-between">
+                                            <span>• Main ({room.room_classification.composition.main_area.type}):</span>
+                                            <span className="font-medium">{room.room_classification.composition.main_area.area_sqft?.toFixed(1)} sq ft</span>
+                                          </div>
+                                          {room.room_classification.composition.sub_areas?.map((subArea, idx) => (
+                                            <div key={idx} className="flex justify-between">
+                                              <span className="text-purple-700">• Sub-area ({subArea.type}):</span>
+                                              <span className="font-medium">
+                                                {subArea.area_sqft?.toFixed(1)} sq ft
+                                                {subArea.material_applicable === false && (
+                                                  <span className="text-orange-600 ml-1">(No flooring)</span>
+                                                )}
+                                                {subArea.material_applicable === true && (
+                                                  <span className="text-green-600 ml-1">(Same flooring)</span>
+                                                )}
+                                              </span>
+                                            </div>
+                                          ))}
+                                          <div className="pt-1 mt-1 border-t border-gray-300 flex justify-between font-medium text-green-800">
+                                            <span>Total Area:</span>
+                                            <span>{room.total_measurements?.floor_area_sqft?.toFixed(1)} sq ft</span>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        /* Legacy structure support */
+                                        <div className="text-xs text-gray-600 space-y-1">
+                                          <div>• Main: {room.main_area?.name}</div>
+                                          {room.sub_areas?.map((subArea, idx) => (
+                                            <div key={idx}>• {subArea.type}: {subArea.name}</div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <input
+                                        type="text"
+                                        value={room.name || ''}
+                                        onChange={(e) => updateRoomName(locationIndex, roomIndex, e.target.value)}
+                                        className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        placeholder="Enter room name"
+                                      />
+                                      {isEmpty && (
+                                        <div className="text-xs text-red-600">⚠️ Empty name</div>
+                                      )}
+                                      {hasDuplicate && (
+                                        <div className="text-xs text-orange-600">⚠️ Duplicate name</div>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               ) : (
-                                <span className={isEmpty ? 'text-gray-400 italic' : ''}>
-                                  {room.name || 'Unnamed Room'}
-                                </span>
+                                <div>
+                                  {(room.is_merged || room.room_classification?.is_merged_room) ? (
+                                    <div className="space-y-1">
+                                      <div className="flex items-center space-x-2">
+                                        <span className="font-medium">{room.name}</span>
+                                        <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                                          Merged
+                                        </span>
+                                      </div>
+                                      {/* Show composition details using new simplified structure */}
+                                      <div className="text-xs text-gray-600">
+                                        <div>Contains: Main + {room.sub_areas?.length || 0} sub-area(s)</div>
+                                        <div className="mt-1 space-y-0.5">
+                                          {room.sub_areas?.map((subArea, idx) => (
+                                            <div key={idx} className="text-purple-600">
+                                              • {subArea.type} ({subArea.measurements?.floor_area_sqft?.toFixed(1)} sq ft)
+                                              {subArea.material_applicable === false && (
+                                                <span className="text-orange-600 ml-1">(No flooring)</span>
+                                              )}
+                                              {subArea.material_applicable === true && (
+                                                <span className="text-green-600 ml-1">(Same flooring)</span>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className={isEmpty ? 'text-gray-400 italic' : ''}>
+                                      {room.name || 'Unnamed Room'}
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {room.measurements.floor_area_sqft?.toFixed(1)} sq ft
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {room.measurements.wall_area_sqft?.toFixed(1)} sq ft
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {room.measurements.height}' 
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-900">
-                              <div className="space-y-1">
-                                {room.measurements.openings?.map((opening, openingIndex) => (
-                                  <div key={openingIndex} className="flex items-center space-x-2">
-                                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                      opening.type === 'door' ? 'bg-blue-100 text-blue-800' :
-                                      opening.type === 'window' ? 'bg-green-100 text-green-800' :
-                                      'bg-orange-100 text-orange-800'
-                                    }`}>
-                                      {opening.type}
-                                    </span>
-                                    <span className="text-xs text-gray-600">
-                                      {opening.size}
-                                      {opening.opens_to && (
-                                        <span className="text-gray-500 ml-1">→ {opening.opens_to}</span>
-                                      )}
-                                    </span>
+                            {editMode && (
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                <div className="space-y-2">
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Sub-area Type</label>
+                                    <div className="space-y-2">
+                                      <input
+                                        type="text"
+                                        list={`subarea-types-${locationIndex}-${roomIndex}`}
+                                        value={room.room_classification?.sub_area_type || ''}
+                                        placeholder="Select or type sub-area type"
+                                        onChange={(e) => {
+                                          const subAreaType = e.target.value.trim() || null;
+                                          
+                                          // Define material applicability for each sub-area type
+                                          const materialApplicabilityMap = {
+                                            // Types that need flooring materials (same as parent)
+                                            'closet': { applicable: true, reason: 'Walking space requires flooring' },
+                                            'pantry': { applicable: true, reason: 'Walking space requires flooring' },
+                                            'alcove': { applicable: true, reason: 'Living space requires flooring' },
+                                            'walk_in_shower': { applicable: true, reason: 'Requires specialized shower flooring' },
+                                            'walk-in shower': { applicable: true, reason: 'Requires specialized shower flooring' },
+                                            // Types that don't need flooring materials (separate treatment)
+                                            'bathtub': { applicable: false, reason: 'Has built-in tub surface, no additional flooring' },
+                                            'shower_booth': { applicable: false, reason: 'Has built-in shower pan, separate from room flooring' },
+                                            'shower booth': { applicable: false, reason: 'Has built-in shower pan, separate from room flooring' },
+                                            'cabinet': { applicable: false, reason: 'Interior cabinet surfaces, not floor area' },
+                                            'fixture': { applicable: false, reason: 'Fixed equipment area, no flooring needed' }
+                                          };
+                                          
+                                          // Update all classification fields at once to avoid race conditions
+                                          const newData = JSON.parse(JSON.stringify(editableData));
+                                          if (newData[locationIndex] && newData[locationIndex].rooms[roomIndex]) {
+                                            if (!newData[locationIndex].rooms[roomIndex].room_classification) {
+                                              newData[locationIndex].rooms[roomIndex].room_classification = {};
+                                            }
+                                            
+                                            const roomClassification = newData[locationIndex].rooms[roomIndex].room_classification;
+                                            
+                                            // Update sub-area type
+                                            roomClassification.sub_area_type = subAreaType;
+                                            
+                                            // Update material applicability based on sub-area type
+                                            if (subAreaType && materialApplicabilityMap[subAreaType.toLowerCase()]) {
+                                              const config = materialApplicabilityMap[subAreaType.toLowerCase()];
+                                              roomClassification.is_sub_area = true;
+                                              roomClassification.material_applicable = config.applicable;
+                                              roomClassification.user_confirmed = true;
+                                              
+                                              // Show user-friendly message about material applicability
+                                              const materialStatus = config.applicable ? 
+                                                'will use the same flooring materials as the parent room' : 
+                                                'will NOT use flooring materials (handled separately)';
+                                              
+                                              alert(`${subAreaType.charAt(0).toUpperCase() + subAreaType.slice(1)} selected.\n\nThis area ${materialStatus}.\n\nReason: ${config.reason}`);
+                                            } else if (subAreaType === null) {
+                                              // Reset to regular room
+                                              roomClassification.is_sub_area = false;
+                                              roomClassification.material_applicable = true;
+                                              roomClassification.user_confirmed = true;
+                                            } else if (subAreaType) {
+                                              // Custom sub-area type - ask user about material applicability
+                                              roomClassification.is_sub_area = true;
+                                              roomClassification.user_confirmed = true;
+                                              
+                                              const userChoice = confirm(`Custom sub-area type "${subAreaType}" selected.\n\nDoes this area need flooring materials (same as parent room)?\n\nClick OK if YES (needs flooring)\nClick Cancel if NO (no flooring needed)`);
+                                              roomClassification.material_applicable = userChoice;
+                                              
+                                              const materialStatus = userChoice ? 
+                                                'will use the same flooring materials as the parent room' : 
+                                                'will NOT use flooring materials (handled separately)';
+                                              
+                                              alert(`Custom sub-area "${subAreaType}" configured.\n\nThis area ${materialStatus}.`);
+                                            }
+                                            
+                                            // Validate and filter openings for the sub-area
+                                            if (subAreaType) {
+                                              const room = newData[locationIndex].rooms[roomIndex];
+                                              const validatedRoom = validateSubAreaOpenings(room, subAreaType);
+                                              newData[locationIndex].rooms[roomIndex] = validatedRoom;
+                                            }
+                                            
+                                            // Apply the changes
+                                            setEditableData(newData);
+                                          }
+                                          
+                                          // Auto-suggest room name when sub-area type is selected
+                                          if (subAreaType) {
+                                            const currentName = room.name || '';
+                                            const baseName = currentName.replace(/ #\d+$/, '');
+                                            
+                                            // Find a potential parent room
+                                            const parentRoom = location.rooms.find((r, i) => {
+                                              const rBaseName = r.name.replace(/ #\d+$/, '');
+                                              return i !== roomIndex && 
+                                                     rBaseName !== baseName && 
+                                                     !r.room_classification?.is_sub_area &&
+                                                     (rBaseName.toLowerCase().includes(subAreaType) || 
+                                                      (subAreaType === 'bathtub' && rBaseName.toLowerCase().includes('bathroom')));
+                                            });
+                                            
+                                            if (parentRoom && !currentName.startsWith(parentRoom.name.replace(/ #\d+$/, ''))) {
+                                              const suggestedName = `${parentRoom.name.replace(/ #\d+$/, '')} #2`;
+                                              if (confirm(`Suggested room name: "${suggestedName}". Update room name?`)) {
+                                                updateRoomName(locationIndex, roomIndex, suggestedName);
+                                              }
+                                            }
+                                          }
+                                        }}
+                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      />
+                                      <datalist id={`subarea-types-${locationIndex}-${roomIndex}`}>
+                                        <option value="">Regular Room</option>
+                                        <option value="closet">Closet (📁 with flooring)</option>
+                                        <option value="pantry">Pantry (📁 with flooring)</option>
+                                        <option value="alcove">Alcove (📁 with flooring)</option>
+                                        <option value="walk-in shower">Walk-in Shower (📁 with flooring)</option>
+                                        <option value="bathtub">Bathtub (🚫 no flooring)</option>
+                                        <option value="shower booth">Shower Booth (🚫 no flooring)</option>
+                                        <option value="cabinet">Cabinet (🚫 no flooring)</option>
+                                        <option value="fixture">Other Fixture (🚫 no flooring)</option>
+                                      </datalist>
+                                      
+                                    </div>
                                   </div>
-                                ))}
+                                  {room.room_classification?.is_sub_area && (
+                                    <div className="flex items-center space-x-1">
+                                      <span className={`text-xs px-2 py-1 rounded-full ${
+                                        room.room_classification?.material_applicable 
+                                          ? 'bg-green-100 text-green-800' 
+                                          : 'bg-orange-100 text-orange-800'
+                                      }`}>
+                                        {room.room_classification?.material_applicable ? 'Material ✓' : 'No Material'}
+                                      </span>
+                                      {room.room_classification?.detection_confidence && (
+                                        <span className="text-xs text-gray-500">
+                                          ({room.room_classification.detection_confidence} confidence)
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            )}
+                            <td className="px-6 py-3 text-sm text-gray-900 text-center">
+                              {(room.is_merged || room.room_classification?.is_merged_room) ? (
+                                <div className="space-y-1">
+                                  <div className="font-medium text-green-800">
+                                    {(room.main_area?.measurements?.floor_area_sqft || room.measurements?.floor_area_sqft)?.toFixed(1)} sq ft
+                                    <div className="text-xs text-gray-600">(Material calc)</div>
+                                  </div>
+                                  {room.sub_areas && (
+                                    <div className="text-xs text-gray-600 space-y-0.5">
+                                      <div className="text-blue-700">
+                                        Main: {room.main_area?.measurements?.floor_area_sqft?.toFixed(1)} sq ft
+                                      </div>
+                                      {room.sub_areas?.map((subArea, idx) => (
+                                        <div key={idx} className="text-purple-600">
+                                          {subArea.type}: {subArea.measurements?.floor_area_sqft?.toFixed(1)} sq ft
+                                        </div>
+                                      ))}
+                                      <div className="border-t border-gray-300 pt-0.5 font-medium text-green-700">
+                                        Total: {room.total_measurements?.floor_area_sqft?.toFixed(1)} sq ft
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <span>{(room.main_area?.measurements?.floor_area_sqft || room.measurements?.floor_area_sqft)?.toFixed(1)} sq ft</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3 text-sm text-gray-900 text-center">
+                              {(room.is_merged || room.room_classification?.is_merged_room) ? (
+                                <div className="space-y-1">
+                                  <div className="font-medium text-green-800">
+                                    {(room.main_area?.measurements?.wall_area_sqft || room.measurements?.wall_area_sqft)?.toFixed(1)} sq ft
+                                    <div className="text-xs text-gray-600">(Material calc)</div>
+                                  </div>
+                                  {room.total_measurements && (
+                                    <div className="text-xs text-green-700 font-medium">
+                                      Total: {room.total_measurements.wall_area_sqft?.toFixed(1)} sq ft
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <span>{(room.main_area?.measurements?.wall_area_sqft || room.measurements?.wall_area_sqft)?.toFixed(1)} sq ft</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3 text-sm text-gray-900 text-center">
+                              {(room.main_area?.measurements?.height || room.measurements?.height)}' 
+                            </td>
+                            <td className="px-6 py-3 text-sm text-gray-900">
+                              <div className="space-y-1">
+                                {(room.main_area?.measurements?.openings || room.measurements?.openings)?.map((opening, openingIndex) => {
+                                  // Check if this opening is valid for the sub-area type
+                                  const isSubArea = room.room_classification?.is_sub_area;
+                                  const subAreaType = room.room_classification?.sub_area_type;
+                                  const validOpeningTypes = isSubArea && subAreaType ? getValidOpeningsForSubArea(subAreaType) : null;
+                                  const isValidOpening = !validOpeningTypes || validOpeningTypes.includes(opening.type);
+                                  const isEditing = editingOpening?.locationIndex === locationIndex && 
+                                                   editingOpening?.roomIndex === roomIndex && 
+                                                   editingOpening?.openingIndex === openingIndex;
+                                  
+                                  return (
+                                    <div key={openingIndex} className="flex items-center space-x-2 group">
+                                      {isEditing ? (
+                                        // Edit mode for this opening
+                                        <div className="flex flex-wrap items-center gap-1 p-2 bg-gray-50 rounded border text-xs">
+                                          <select
+                                            value={opening.type}
+                                            onChange={(e) => updateOpening(locationIndex, roomIndex, openingIndex, 'type', e.target.value)}
+                                            className="text-xs border border-gray-300 rounded px-1 py-1 min-w-16"
+                                          >
+                                            <option value="door">Door</option>
+                                            <option value="window">Window</option>
+                                            <option value="open_wall">Open Wall</option>
+                                          </select>
+                                          <input
+                                            type="text"
+                                            value={opening.size}
+                                            onChange={(e) => updateOpening(locationIndex, roomIndex, openingIndex, 'size', e.target.value)}
+                                            className="text-xs border border-gray-300 rounded px-1 py-1 w-16 min-w-16"
+                                            placeholder="Size"
+                                          />
+                                          <input
+                                            type="text"
+                                            value={opening.opens_to || ''}
+                                            onChange={(e) => updateOpening(locationIndex, roomIndex, openingIndex, 'opens_to', e.target.value)}
+                                            className="text-xs border border-gray-300 rounded px-1 py-1 w-14 min-w-14"
+                                            placeholder="To"
+                                          />
+                                          <button
+                                            onClick={() => setEditingOpening(null)}
+                                            className="text-xs text-green-600 hover:text-green-800 px-1"
+                                            title="Save changes"
+                                          >
+                                            ✓
+                                          </button>
+                                          <button
+                                            onClick={() => removeOpening(locationIndex, roomIndex, openingIndex)}
+                                            className="text-xs text-red-600 hover:text-red-800 px-1"
+                                            title="Delete opening"
+                                          >
+                                            🗑️
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        // Display mode
+                                        <>
+                                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                            !isValidOpening ? 'bg-red-100 text-red-800 line-through' :
+                                            opening.type === 'door' ? 'bg-blue-100 text-blue-800' :
+                                            opening.type === 'window' ? 'bg-green-100 text-green-800' :
+                                            'bg-orange-100 text-orange-800'
+                                          }`}>
+                                            {opening.type}
+                                            {!isValidOpening && (
+                                              <span className="ml-1" title={`Invalid for ${subAreaType} sub-area`}>⚠️</span>
+                                            )}
+                                          </span>
+                                          <span className="text-xs text-gray-600">
+                                            {opening.size}
+                                            {opening.opens_to && (
+                                              <span className="text-gray-500 ml-1">→ {opening.opens_to}</span>
+                                            )}
+                                            {!isValidOpening && (
+                                              <span className="text-red-600 ml-1 text-xs">(Invalid for {subAreaType})</span>
+                                            )}
+                                          </span>
+                                          {editMode && (
+                                            <button
+                                              onClick={() => setEditingOpening({locationIndex, roomIndex, openingIndex})}
+                                              className="text-xs text-blue-600 hover:text-blue-800 opacity-0 group-hover:opacity-100 transition-opacity"
+                                              title="Edit opening"
+                                            >
+                                              ✏️
+                                            </button>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                {editMode && (
+                                  <button
+                                    onClick={() => addOpening(locationIndex, roomIndex)}
+                                    className="text-xs text-green-600 hover:text-green-800 mt-1 flex items-center space-x-1"
+                                    title="Add new opening"
+                                  >
+                                    <span>+ Add Opening</span>
+                                  </button>
+                                )}
                               </div>
                             </td>
                             {editMode && (
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                <div className="flex flex-col space-y-1">
-                                  {hasDuplicate && (
+                              <td className="px-6 py-3 text-sm text-gray-900 text-center">
+                                <div className="flex flex-col space-y-1 items-center">
+                                  {room.is_merged ? (
                                     <button
-                                      onClick={() => {
-                                        const duplicateIndex = location.rooms.findIndex((r, i) => i > roomIndex && r.name === room.name);
-                                        if (duplicateIndex !== -1) {
-                                          mergeRooms(locationIndex, roomIndex, duplicateIndex);
-                                        }
-                                      }}
-                                      className="text-xs bg-orange-100 text-orange-800 px-2 py-1 rounded hover:bg-orange-200"
-                                      title="Merge with duplicate room"
+                                      onClick={() => unmergeRoom(locationIndex, roomIndex)}
+                                      className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded hover:bg-red-200"
+                                      title="Split merged room back to separate rooms"
                                     >
-                                      🔄 Merge
+                                      ↗️ Unmerge
                                     </button>
+                                  ) : (
+                                    <>
+                                      {hasDuplicate && (
+                                        <button
+                                          onClick={() => {
+                                            console.log('Looking for duplicate of:', room.name);
+                                            console.log('Available rooms:', location.rooms.map((r, i) => `${i}: ${r.name}`));
+                                            
+                                            const duplicateIndex = location.rooms.findIndex((r, i) => {
+                                              const isDuplicate = i > roomIndex && r.name === room.name && room.name.trim() !== '';
+                                              console.log(`Room ${i} (${r.name}): matches name=${r.name === room.name}, after current=${i > roomIndex}, not empty=${room.name.trim() !== ''}, is duplicate=${isDuplicate}`);
+                                              return isDuplicate;
+                                            });
+                                            
+                                            console.log('Found duplicate index:', duplicateIndex);
+                                            if (duplicateIndex !== -1) {
+                                              console.log(`Merging room ${roomIndex} (${room.name}) with room ${duplicateIndex} (${location.rooms[duplicateIndex].name})`);
+                                              mergeRooms(locationIndex, roomIndex, duplicateIndex);
+                                            } else {
+                                              alert('No duplicate room found');
+                                            }
+                                          }}
+                                          className="text-xs bg-orange-100 text-orange-800 px-2 py-1 rounded hover:bg-orange-200"
+                                          title="Merge with duplicate room"
+                                        >
+                                          🔄 Merge Duplicates
+                                        </button>
+                                      )}
+                                      {room.room_classification?.is_sub_area && !hasDuplicate && (
+                                        <button
+                                          onClick={() => {
+                                            // Find parent room (same base name, non-sub-area)
+                                            const baseName = room.name.replace(/ #\d+$/, '');
+                                            const subAreaType = room.room_classification?.sub_area_type;
+                                            const subAreaArea = room.measurements?.floor_area_sqft?.toFixed(1);
+                                            
+                                            console.log(`Merging sub-area "${room.name}" (${subAreaType}, ${subAreaArea} sq ft) as sub-area of parent room with base name: ${baseName}`);
+                                            
+                                            const parentIndex = location.rooms.findIndex((r, i) => {
+                                              const rBaseName = r.name.replace(/ #\d+$/, '');
+                                              return i !== roomIndex && 
+                                                rBaseName === baseName && 
+                                                !r.room_classification?.is_sub_area;
+                                            });
+                                          
+                                            if (parentIndex !== -1) {
+                                              const parentRoom = location.rooms[parentIndex];
+                                              console.log(`Found parent room: ${parentRoom.name} (${parentRoom.measurements?.floor_area_sqft?.toFixed(1)} sq ft)`);
+                                              console.log(`Sub-area details: ${subAreaType} area with ${subAreaArea} sq ft`);
+                                              
+                                              // Use the proper merge function that creates new structure
+                                              mergeRoomsAsSubArea(locationIndex, parentIndex, roomIndex);
+                                              
+                                              // Show success message
+                                              setTimeout(() => {
+                                                const materialNote = ['bathtub', 'cabinet', 'fixture'].includes(subAreaType) ? 
+                                                  '\nNote: Materials apply to main area only (sub-area has no physical flooring)' : 
+                                                  '\nNote: Materials apply to main area only';
+                                                alert(`Successfully merged "${room.name}" as ${subAreaType} sub-area of "${baseName}"!${materialNote}`);
+                                              }, 100);
+                                            } else {
+                                              alert(`No parent room found for "${room.name}".\n\nPlease ensure there's a main room with base name "${baseName}".\n\nAvailable rooms: ${location.rooms.map(r => r.name).join(', ')}`);
+                                            }
+                                          }}
+                                          className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded hover:bg-green-200"
+                                          title={`Merge "${room.name}" as ${room.room_classification?.sub_area_type || 'sub-area'} of parent room`}
+                                        >
+                                          Merge as Sub-area
+                                        </button>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               </td>

@@ -63,9 +63,23 @@ const OpeningVerification = () => {
               ...locationData,
               rooms: locationData.rooms.map(room => {
                 if (room.name === roomName) {
-                  return {
-                    ...room,
-                    measurements: {
+                  const updatedRoom = { ...room };
+                  
+                  if (room.is_merged) {
+                    // For merged rooms, update total_measurements
+                    updatedRoom.total_measurements = {
+                      ...room.total_measurements,
+                      openings: newOpenings.map(opening => ({
+                        type: opening.type,
+                        size: opening.type === 'open_wall' 
+                          ? `${opening.width}' wide opening`
+                          : `${opening.width}' × ${opening.height}'${opening.type === 'window' ? ' window' : ''}`
+                      })),
+                      ...response.updated_measurements
+                    };
+                  } else {
+                    // For regular rooms, update measurements
+                    updatedRoom.measurements = {
                       ...room.measurements,
                       openings: newOpenings.map(opening => ({
                         type: opening.type,
@@ -74,8 +88,18 @@ const OpeningVerification = () => {
                           : `${opening.width}' × ${opening.height}'${opening.type === 'window' ? ' window' : ''}`
                       })),
                       ...response.updated_measurements
-                    }
-                  };
+                    };
+                  }
+                  
+                  // Also update selectedRoom if it's the same room
+                  if (selectedRoom?.room.name === roomName && selectedRoom?.location === location) {
+                    setSelectedRoom(prev => ({
+                      ...prev,
+                      room: updatedRoom
+                    }));
+                  }
+                  
+                  return updatedRoom;
                 }
                 return room;
               })
@@ -86,6 +110,15 @@ const OpeningVerification = () => {
 
         // Update session storage
         sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(updatedData));
+        
+        // Dispatch custom event for same-window components to detect the change
+        window.dispatchEvent(new CustomEvent('customStorageChange', {
+          detail: {
+            key: `measurementData_${sessionId}`,
+            newValue: JSON.stringify(updatedData)
+          }
+        }));
+        
         return updatedData;
       });
 
@@ -117,6 +150,17 @@ const OpeningVerification = () => {
   const calculateTotalRooms = () => {
     if (!measurementData) return 0;
     return measurementData.reduce((total, location) => total + location.rooms.length, 0);
+  };
+
+  // Get current room data from measurementData (for real-time updates)
+  const getCurrentRoomData = () => {
+    if (!selectedRoom || !measurementData) return null;
+    
+    const location = measurementData.find(loc => loc.location === selectedRoom.location);
+    if (!location) return null;
+    
+    const room = location.rooms.find(r => r.name === selectedRoom.room.name);
+    return room || selectedRoom.room;
   };
 
   const handleContinue = () => {
@@ -241,13 +285,44 @@ const OpeningVerification = () => {
                         }`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-gray-900">{room.name}</span>
+                          <div className="flex flex-col">
+                            <div className="flex items-center space-x-2">
+                              <span className="font-medium text-gray-900">{room.name}</span>
+                              {room.is_merged && (
+                                <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                                  Merged
+                                </span>
+                              )}
+                            </div>
+                            {room.is_merged && (
+                              <div className="text-xs text-gray-600 mt-1">
+                                Main area + {room.sub_areas?.length || 0} sub-area(s)
+                              </div>
+                            )}
+                          </div>
                           <span className="text-xs text-gray-500">
-                            {room.measurements?.openings?.length || 0} opening(s)
+                            {(() => {
+                              if (room.is_merged) {
+                                // For merged rooms, count total openings from all areas
+                                const mainOpenings = room.total_measurements?.openings?.length || 0;
+                                return `${mainOpenings} opening(s)`;
+                              } else {
+                                // For regular rooms
+                                return `${room.measurements?.openings?.length || 0} opening(s)`;
+                              }
+                            })()}
                           </span>
                         </div>
                         <div className="text-sm text-gray-500 mt-1">
-                          {room.measurements?.floor_area_sqft?.toFixed(0)} sq ft
+                          {(() => {
+                            if (room.is_merged) {
+                              // For merged rooms, show total area
+                              return `${room.total_measurements?.floor_area_sqft?.toFixed(0) || 0} sq ft (total)`;
+                            } else {
+                              // For regular rooms
+                              return `${room.measurements?.floor_area_sqft?.toFixed(0) || 0} sq ft`;
+                            }
+                          })()}
                         </div>
                       </button>
                     ))}
@@ -259,80 +334,146 @@ const OpeningVerification = () => {
 
           {/* Opening Editor */}
           <div className="lg:col-span-2">
-            {selectedRoom ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-                <div className="px-6 py-4 border-b border-gray-200">
-                  <h3 className="text-lg font-medium text-gray-900">
-                    {selectedRoom.room.name}
-                  </h3>
-                  <p className="text-sm text-gray-600 mt-1">
-                    {selectedRoom.location} • {selectedRoom.room.measurements?.floor_area_sqft?.toFixed(0)} sq ft
-                  </p>
-                </div>
-                <div className="p-6">
-                  <OpeningEditor
-                    openings={selectedRoom.room.measurements?.openings?.map(opening => {
-                      // Parse existing opening format back to editable format
-                      const match = opening.size.match(/(\d+(?:\.\d+)?)'?\s*[×x]\s*(\d+(?:\.\d+)?)'?/);
-                      if (match) {
-                        return {
-                          type: opening.type,
-                          width: parseFloat(match[1]),
-                          height: parseFloat(match[2])
-                        };
-                      } else if (opening.type === 'open_wall') {
-                        const widthMatch = opening.size.match(/(\d+(?:\.\d+)?)'?\s*wide/);
-                        return {
-                          type: opening.type,
-                          width: widthMatch ? parseFloat(widthMatch[1]) : 6.0,
-                          height: 8.0
-                        };
+            {selectedRoom ? (() => {
+              const currentRoom = getCurrentRoomData();
+              return currentRoom ? (
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                  <div className="px-6 py-4 border-b border-gray-200">
+                    <h3 className="text-lg font-medium text-gray-900">
+                      {currentRoom.name}
+                    </h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {selectedRoom.location} • {(() => {
+                        if (currentRoom.is_merged) {
+                          return `${currentRoom.total_measurements?.floor_area_sqft?.toFixed(0) || 0} sq ft (total)`;
+                        } else {
+                          return `${currentRoom.measurements?.floor_area_sqft?.toFixed(0) || 0} sq ft`;
+                        }
+                      })()}
+                      {currentRoom.is_merged && (
+                        <span className="ml-2 px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                          Merged Room
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="p-6">
+                    <OpeningEditor
+                      openings={(() => {
+                        // Get openings from appropriate location based on room type
+                        const openings = currentRoom.is_merged 
+                          ? currentRoom.total_measurements?.openings 
+                          : currentRoom.measurements?.openings;
+                        
+                        return (openings || []).map(opening => {
+                          // Parse existing opening format back to editable format
+                          const match = opening.size.match(/(\d+(?:\.\d+)?)'?\s*[×x]\s*(\d+(?:\.\d+)?)'?/);
+                          if (match) {
+                            return {
+                              type: opening.type,
+                              width: parseFloat(match[1]),
+                              height: parseFloat(match[2])
+                            };
+                          } else if (opening.type === 'open_wall') {
+                            const widthMatch = opening.size.match(/(\d+(?:\.\d+)?)'?\s*wide/);
+                            return {
+                              type: opening.type,
+                              width: widthMatch ? parseFloat(widthMatch[1]) : 6.0,
+                              height: 8.0
+                            };
+                          }
+                          return {
+                            type: opening.type || 'door',
+                            width: 3.0,
+                            height: 6.8
+                          };
+                        });
+                      })()}
+                      onChange={(newOpenings) => 
+                        handleOpeningUpdate(selectedRoom.location, currentRoom.name, newOpenings)
                       }
-                      return {
-                        type: opening.type || 'door',
-                        width: 3.0,
-                        height: 6.8
-                      };
-                    }) || []}
-                    onChange={(newOpenings) => 
-                      handleOpeningUpdate(selectedRoom.location, selectedRoom.room.name, newOpenings)
-                    }
-                    roomName={selectedRoom.room.name}
-                  />
+                      roomName={currentRoom.name}
+                    />
 
-                  {/* Measurement Impact */}
-                  <div className="mt-6 pt-6 border-t border-gray-200">
-                    <h4 className="font-medium text-gray-900 mb-3">Current Measurements</h4>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-gray-600">Wall Area:</span>
-                        <span className="ml-2 font-medium">
-                          {selectedRoom.room.measurements?.wall_area_sqft?.toFixed(1)} sq ft
-                        </span>
+                    {/* Show merged room composition */}
+                    {currentRoom.is_merged && (
+                      <div className="mt-6 pt-6 border-t border-gray-200">
+                        <h4 className="font-medium text-gray-900 mb-3">Room Composition</h4>
+                        <div className="bg-blue-50 p-4 rounded-md border border-blue-200 mb-4">
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-blue-800">Main Area:</span>
+                              <span className="font-medium">{currentRoom.main_area?.measurements?.floor_area_sqft?.toFixed(1)} sq ft</span>
+                            </div>
+                            {currentRoom.sub_areas?.map((subArea, idx) => (
+                              <div key={idx} className="flex justify-between">
+                                <span className="text-blue-700">Sub-area ({subArea.type}):</span>
+                                <span className="font-medium">{subArea.measurements?.floor_area_sqft?.toFixed(1)} sq ft {!subArea.material_applicable && <span className="text-orange-600">- No materials</span>}</span>
+                              </div>
+                            ))}
+                            <div className="pt-2 border-t border-blue-200 flex justify-between font-medium">
+                              <span className="text-blue-900">Total Area:</span>
+                              <span>{currentRoom.total_measurements?.floor_area_sqft?.toFixed(1)} sq ft</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <span className="text-gray-600">Floor Area:</span>
-                        <span className="ml-2 font-medium">
-                          {selectedRoom.room.measurements?.floor_area_sqft?.toFixed(1)} sq ft
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Ceiling Area:</span>
-                        <span className="ml-2 font-medium">
-                          {selectedRoom.room.measurements?.ceiling_area_sqft?.toFixed(1)} sq ft
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Perimeter:</span>
-                        <span className="ml-2 font-medium">
-                          {selectedRoom.room.measurements?.floor_perimeter_lf?.toFixed(1)} ft
-                        </span>
+                    )}
+
+                    {/* Measurement Impact */}
+                    <div className="mt-6 pt-6 border-t border-gray-200">
+                      <h4 className="font-medium text-gray-900 mb-3">Current Measurements</h4>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-600">Wall Area:</span>
+                          <span className="ml-2 font-medium">
+                            {(() => {
+                              const measurements = currentRoom.is_merged 
+                                ? currentRoom.total_measurements 
+                                : currentRoom.measurements;
+                              return `${measurements?.wall_area_sqft?.toFixed(1) || 0} sq ft`;
+                            })()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Floor Area:</span>
+                          <span className="ml-2 font-medium">
+                            {(() => {
+                              const measurements = currentRoom.is_merged 
+                                ? currentRoom.total_measurements 
+                                : currentRoom.measurements;
+                              return `${measurements?.floor_area_sqft?.toFixed(1) || 0} sq ft`;
+                            })()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Ceiling Area:</span>
+                          <span className="ml-2 font-medium">
+                            {(() => {
+                              const measurements = currentRoom.is_merged 
+                                ? currentRoom.total_measurements 
+                                : currentRoom.measurements;
+                              return `${measurements?.ceiling_area_sqft?.toFixed(1) || 0} sq ft`;
+                            })()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Perimeter:</span>
+                          <span className="ml-2 font-medium">
+                            {(() => {
+                              const measurements = currentRoom.is_merged 
+                                ? currentRoom.total_measurements 
+                                : currentRoom.measurements;
+                              return `${measurements?.floor_perimeter_lf?.toFixed(1) || 0} ft`;
+                            })()}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ) : (
+              ) : null;
+            })() : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 flex items-center justify-center h-96">
                 <div className="text-center text-gray-500">
                   <p className="text-lg mb-2">Select a room to edit openings</p>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
+import { buildApiUrl, API_CONFIG } from '../config/api';
 import logger from '../utils/logger';
 
 const ProjectManagement = () => {
@@ -19,7 +20,7 @@ const ProjectManagement = () => {
       console.log('Loading projects from API...');
       
       // Use direct fetch for simplicity
-      const response = await fetch('http://localhost:8001/api/pre-estimate/projects');
+      const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.PRE_ESTIMATE.PROJECTS));
       const data = await response.json();
       
       if (response.ok && data) {
@@ -54,7 +55,7 @@ const ProjectManagement = () => {
 
     try {
       setIsDeleting(project.session_id);
-      const response = await fetch(`http://localhost:8001/api/pre-estimate/projects/${project.session_id}`, {
+      const response = await fetch(buildApiUrl(`${API_CONFIG.ENDPOINTS.PRE_ESTIMATE.PROJECTS}/${project.session_id}`), {
         method: 'DELETE'
       });
 

@@ -5,9 +5,10 @@
 @tailwind utilities;
 
 #root {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 2rem;
+  width: 100%;
 }
 
 /* Only center text for specific elements if needed */

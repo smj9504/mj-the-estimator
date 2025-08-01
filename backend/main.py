@@ -9,6 +9,7 @@ from config import settings
 
 # Import routers
 from routers.pre_estimate import router as pre_estimate_router
+from routers.material_analysis import router as material_analysis_router
 from models.database import init_database
 
 # Import our custom logger
@@ -42,6 +43,7 @@ init_database()
 
 # Include routers
 app.include_router(pre_estimate_router)
+app.include_router(material_analysis_router, prefix="/api")
 
 # Startup and shutdown events
 @app.on_event("startup")

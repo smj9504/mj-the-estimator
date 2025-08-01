@@ -1,4 +1,5 @@
 import logger from './logger';
+import { API_CONFIG } from '../config/api';
 
 // API wrapper with automatic logging
 class API {
@@ -127,7 +128,7 @@ class API {
 }
 
 // Create and export API instance
-const api = new API('http://localhost:8001');
+const api = new API(API_CONFIG.BASE_URL);
 
 // Pre-estimate API functions
 export const createSession = (projectName = null) => {

@@ -147,3 +147,42 @@ Instructions:
 Cleaned text:
 """
 )
+
+# Material analysis prompt for image analysis
+MATERIAL_ANALYSIS_PROMPT = PromptTemplate(
+    input_variables=["room_context", "focus_text"],
+    template="""
+{room_context}Analyze this image of a room/building interior to identify building materials. 
+{focus_text}
+
+For each material you can identify, determine:
+1. Material type (floor, wall, ceiling, baseboard, quarter_round, trim, countertop, cabinet)
+2. Specific material name (e.g., "Laminate Wood", "Ceramic Tile", "Painted Drywall")
+3. Confidence level (1-10, where 10 is completely certain)
+4. Detailed description
+5. Whether underlayment is needed (for flooring materials)
+6. Recommended underlayment if needed
+7. Color/finish description
+8. Texture description
+
+Common material types to look for:
+- Floor: laminate, hardwood, tile, carpet, vinyl, luxury vinyl plank, engineered hardwood
+- Wall: drywall, brick, wood paneling, wallpaper, paint, stone, tile
+- Ceiling: drywall, acoustic tile, wood, exposed beam, drop ceiling
+- Trim: wood, MDF, PVC, painted wood, stained wood
+
+Be conservative with confidence scores - only use 8-10 for materials you're very certain about.
+
+Respond with a JSON array of objects, each with these fields:
+{{
+    "material_type": "floor|wall|ceiling|baseboard|quarter_round|trim|countertop|cabinet",
+    "material_name": "specific material name",
+    "confidence_score": 1-10,
+    "description": "detailed description",
+    "underlayment_needed": true/false,
+    "recommended_underlayment": "underlayment type or null",
+    "color": "color description",
+    "texture": "texture description"
+}}
+"""
+)

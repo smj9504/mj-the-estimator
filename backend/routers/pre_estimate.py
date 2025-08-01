@@ -85,7 +85,7 @@ async def create_session(request: Optional[CreateProjectRequest] = None):
             created_at=session['created_at'],
             updated_at=session['updated_at'],
             project_name=session['project_name'] if session['project_name'] is not None else None,
-            jobsite=session['jobsite'] if session['jobsite'] is not None else None,
+            jobsite=session['jobsite_full_address'] if session['jobsite_full_address'] is not None else None,
             occupancy=session['occupancy'] if session['occupancy'] is not None else None,
             company=company
         )
@@ -224,7 +224,7 @@ async def process_measurement_data(
         
         # Parse with AI (with timeout protection)
         logger.info("Starting AI parsing")
-        parsed_data = ai_service.parse_measurement_data(raw_data, file_type)
+        parsed_data = ai_service.parse_measurement_data(raw_data, file_type, session_id)
         logger.info("AI parsing completed successfully")
         
         # Save to database
@@ -733,6 +733,32 @@ async def get_demolition_scope(session_id: str):
     except Exception as e:
         logger.error(f"Error generating demolition scope: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate demolition scope: {str(e)}")
+
+@router.get("/measurement/progress/{session_id}")
+async def get_measurement_progress(session_id: str):
+    """Get real-time progress for measurement data processing"""
+    try:
+        progress_data = ai_service.get_progress(session_id)
+        return {
+            "session_id": session_id,
+            "stage": progress_data.get('stage', 'unknown'),
+            "message": progress_data.get('message', 'No progress information available'),
+            "progress": progress_data.get('progress', 0),
+            "timestamp": progress_data.get('timestamp')
+        }
+    except Exception as e:
+        logger.error(f"Error getting measurement progress: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get progress information")
+
+@router.delete("/measurement/progress/{session_id}")
+async def clear_measurement_progress(session_id: str):
+    """Clear progress data for a session"""
+    try:
+        ai_service.clear_progress(session_id)
+        return {"message": "Progress data cleared successfully"}
+    except Exception as e:
+        logger.error(f"Error clearing measurement progress: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear progress data")
 
 @router.get("/download/{filename}")
 async def download_final_estimate(filename: str):

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import MaterialAnalysisModal from '../../components/MaterialAnalysisModal';
 
 const MaterialScope = () => {
   const [searchParams] = useSearchParams();
@@ -10,6 +11,7 @@ const MaterialScope = () => {
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isDefaultScopeExpanded, setIsDefaultScopeExpanded] = useState(false);
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
 
   // Default scope state
   const [defaultScope, setDefaultScope] = useState({
@@ -28,6 +30,53 @@ const MaterialScope = () => {
   // Locations and rooms state
   const [locations, setLocations] = useState([]);
 
+  // Function to synchronize locations with measurement data while preserving existing settings
+  const synchronizeLocationsWithMeasurementData = (measurementData, existingLocations) => {
+    const syncedLocations = measurementData.map(locationData => {
+      // Find existing location data
+      const existingLocation = existingLocations.find(loc => loc.location === locationData.location);
+      
+      if (existingLocation) {
+        // Location exists, synchronize rooms
+        const syncedRooms = locationData.rooms?.map(room => {
+          // Find existing room data
+          const existingRoom = existingLocation.rooms.find(r => r.name === room.name);
+          
+          if (existingRoom) {
+            // Room exists, preserve existing settings
+            return existingRoom;
+          } else {
+            // New room, initialize with default settings
+            return {
+              name: room.name,
+              use_default_material: "Y",
+              material_override: {},
+              material_underlayment_override: {}
+            };
+          }
+        }) || [];
+        
+        return {
+          location: locationData.location,
+          rooms: syncedRooms
+        };
+      } else {
+        // New location, initialize all rooms with default settings
+        return {
+          location: locationData.location,
+          rooms: locationData.rooms?.map(room => ({
+            name: room.name,
+            use_default_material: "Y",
+            material_override: {},
+            material_underlayment_override: {}
+          })) || []
+        };
+      }
+    });
+    
+    return syncedLocations;
+  };
+
   // Load measurement data and initialize locations
   useEffect(() => {
     if (sessionId) {
@@ -42,7 +91,13 @@ const MaterialScope = () => {
           if (existingMaterialScope) {
             const parsedMaterialScope = JSON.parse(existingMaterialScope);
             setDefaultScope(parsedMaterialScope.default_scope || defaultScope);
-            setLocations(parsedMaterialScope.locations || []);
+            
+            // Synchronize locations with current measurement data
+            const syncedLocations = synchronizeLocationsWithMeasurementData(
+              parsedMeasurementData, 
+              parsedMaterialScope.locations || []
+            );
+            setLocations(syncedLocations);
           } else {
             // Initialize locations based on measurement data
             const initialLocations = parsedMeasurementData.map(location => ({
@@ -56,16 +111,6 @@ const MaterialScope = () => {
             }));
             setLocations(initialLocations);
           }
-          
-          // Auto-select first room
-          if (locations.length > 0 && locations[0].rooms.length > 0) {
-            setSelectedRoom({
-              location: locations[0].location,
-              locationIndex: 0,
-              room: locations[0].rooms[0],
-              roomIndex: 0
-            });
-          }
         } catch (error) {
           console.error('Error parsing measurement data:', error);
         }
@@ -73,6 +118,55 @@ const MaterialScope = () => {
     }
     setLoading(false);
   }, [sessionId]);
+
+  // Listen for changes in measurement data from other components
+  useEffect(() => {
+    if (!sessionId || !measurementData) return;
+
+    const handleStorageChange = (e) => {
+      if (e.key === `measurementData_${sessionId}` && e.newValue) {
+        try {
+          const updatedMeasurementData = JSON.parse(e.newValue);
+          
+          // Only update if data actually changed
+          if (JSON.stringify(updatedMeasurementData) !== JSON.stringify(measurementData)) {
+            setMeasurementData(updatedMeasurementData);
+            
+            // Synchronize locations while preserving existing settings
+            const syncedLocations = synchronizeLocationsWithMeasurementData(
+              updatedMeasurementData, 
+              locations
+            );
+            setLocations(syncedLocations);
+            
+            console.log('Material Scope synchronized with updated measurement data');
+          }
+        } catch (error) {
+          console.error('Error synchronizing measurement data:', error);
+        }
+      }
+    };
+
+    // Listen for storage changes (works across tabs/windows)
+    window.addEventListener('storage', handleStorageChange);
+    
+    // For same-window changes, we need a custom event listener
+    const handleCustomStorageChange = (e) => {
+      if (e.detail.key === `measurementData_${sessionId}`) {
+        handleStorageChange({
+          key: e.detail.key,
+          newValue: e.detail.newValue
+        });
+      }
+    };
+    
+    window.addEventListener('customStorageChange', handleCustomStorageChange);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('customStorageChange', handleCustomStorageChange);
+    };
+  }, [sessionId, measurementData, locations]);
 
   // Update locations when they change
   useEffect(() => {
@@ -194,6 +288,63 @@ const MaterialScope = () => {
     navigate(`/pre-estimate/opening-verification?session=${sessionId}`);
   };
 
+  const handleAnalysisResults = (suggestions, detectedMaterials) => {
+    try {
+      console.log('Applying AI analysis results:', { suggestions, detectedMaterials });
+      
+      // Update default scope with AI suggestions
+      const newDefaultScope = { ...defaultScope };
+      
+      suggestions.suggestions.forEach(suggestion => {
+        if (suggestion.category === 'material') {
+          newDefaultScope.material = {
+            ...newDefaultScope.material,
+            [suggestion.field_name]: suggestion.suggested_value
+          };
+        } else if (suggestion.category === 'material_underlayment') {
+          newDefaultScope.material_underlayment = {
+            ...newDefaultScope.material_underlayment,
+            [suggestion.field_name]: suggestion.suggested_value
+          };
+        }
+      });
+      
+      setDefaultScope(newDefaultScope);
+      
+      // Show success message with applied materials
+      const appliedMaterials = suggestions.suggestions.map(s => s.suggested_value).join(', ');
+      alert(`AI analysis applied successfully!\n\nDetected materials: ${appliedMaterials}\n\nYou can review and adjust these materials as needed.`);
+      
+      // Expand default scope section to show changes
+      setIsDefaultScopeExpanded(true);
+      
+    } catch (error) {
+      console.error('Error applying analysis results:', error);
+      alert('Failed to apply analysis results. Please try again.');
+    }
+  };
+
+  const openAnalysisModal = () => {
+    setIsAnalysisModalOpen(true);
+  };
+
+  const getRoomTypeContext = () => {
+    if (!selectedRoom?.room) return null;
+    
+    // Try to infer room type from room name
+    const roomName = selectedRoom.room.name.toLowerCase();
+    
+    if (roomName.includes('kitchen')) return 'kitchen';
+    if (roomName.includes('bathroom') || roomName.includes('bath')) return 'bathroom';
+    if (roomName.includes('bedroom') || roomName.includes('bed')) return 'bedroom';
+    if (roomName.includes('living')) return 'living room';
+    if (roomName.includes('dining')) return 'dining room';
+    if (roomName.includes('office')) return 'office';
+    if (roomName.includes('laundry')) return 'laundry room';
+    
+    return null;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -251,23 +402,43 @@ const MaterialScope = () => {
             onClick={() => setIsDefaultScopeExpanded(!isDefaultScopeExpanded)}
           >
             <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Default Material Configuration</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  {isDefaultScopeExpanded 
-                    ? "Set default materials that will be applied to all rooms (unless overridden)"
-                    : "Click to expand and configure default materials"
-                  }
-                </p>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900">Default Material Configuration</h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {isDefaultScopeExpanded 
+                        ? "Set default materials that will be applied to all rooms (unless overridden)"
+                        : "Click to expand and configure default materials"
+                      }
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent expanding/collapsing when clicking the button
+                        openAnalysisModal();
+                      }}
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-medium hover:from-blue-700 hover:to-purple-700 transition-colors flex items-center space-x-2 shadow-sm"
+                      title="Use AI to analyze material photos and automatically identify materials"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                              d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      <span>AI Analysis</span>
+                    </button>
+                    <svg
+                      className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${isDefaultScopeExpanded ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
               </div>
-              <svg
-                className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${isDefaultScopeExpanded ? 'rotate-180' : ''}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
             </div>
           </div>
           
@@ -309,13 +480,26 @@ const MaterialScope = () => {
                             <label className="block text-sm font-medium text-blue-700 mb-1">
                               {key.replace('_', ' ')} Underlayment
                             </label>
-                            <input
-                              type="text"
-                              value={defaultScope.material_underlayment?.[key] || ''}
-                              onChange={(e) => handleDefaultScopeChange('material_underlayment', key, e.target.value)}
-                              className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-blue-50"
-                              placeholder="e.g., 6mm foam pad"
-                            />
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={defaultScope.material_underlayment?.[key] || ''}
+                                onChange={(e) => handleDefaultScopeChange('material_underlayment', key, e.target.value)}
+                                className="flex-1 px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-blue-50"
+                                placeholder="e.g., 6mm foam pad"
+                              />
+                              <button
+                                onClick={() => handleDefaultScopeChange('material_underlayment', key, 'N/A')}
+                                className={`px-3 py-2 text-sm rounded-md border ${
+                                  (defaultScope.material_underlayment?.[key] || '') === 'N/A' 
+                                    ? 'bg-gray-500 text-white border-gray-500' 
+                                    : 'bg-blue-100 text-blue-700 border-blue-300 hover:bg-blue-200'
+                                }`}
+                                title="기본값으로 underlayment가 필요하지 않음"
+                              >
+                                N/A
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -384,9 +568,39 @@ const MaterialScope = () => {
                         }`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-gray-900">{room.name}</span>
+                          <div className="flex flex-col">
+                            <div className="flex items-center space-x-2">
+                              <span className="font-medium text-gray-900">{room.name}</span>
+                              {room.is_merged && (
+                                <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                                  Merged
+                                </span>
+                              )}
+                            </div>
+                            {room.is_merged && (
+                              <div className="text-xs text-gray-600 mt-1">
+                                <div>Main area + {room.sub_areas?.length || 0} sub-area(s)</div>
+                                <div className="text-xs text-gray-500">
+                                  Material applies to main area only
+                                </div>
+                              </div>
+                            )}
+                            {room.room_classification?.is_sub_area && !room.is_merged && (
+                              <span className={`text-xs px-1 py-0.5 rounded mt-1 self-start ${
+                                room.room_classification?.material_applicable 
+                                  ? 'bg-blue-100 text-blue-800' 
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}>
+                                {room.room_classification?.sub_area_type || 'Sub-area'}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-xs text-gray-500">
                             {room.use_default_material === 'Y' ? 'Default' : 'Custom'}
+                            {room.use_default_material === 'N' && 
+                             Object.values(room.material_override || {}).some(value => value === 'N/A') && (
+                              <span className="ml-1 text-orange-600">• N/A</span>
+                            )}
                           </div>
                         </div>
                       </button>
@@ -404,27 +618,123 @@ const MaterialScope = () => {
                 <div className="px-6 py-4 border-b border-gray-200">
                   <h3 className="text-lg font-medium text-gray-900">
                     {selectedRoom.room.name}
+                    {selectedRoom.room.room_classification?.is_sub_area && (
+                      <span className={`ml-2 text-sm px-2 py-1 rounded ${
+                        selectedRoom.room.room_classification?.material_applicable 
+                          ? 'bg-blue-100 text-blue-800' 
+                          : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {selectedRoom.room.room_classification?.sub_area_type || 'Sub-area'}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-sm text-gray-600 mt-1">
                     {selectedRoom.location} - Material Configuration
+                    {selectedRoom.room.is_merged && (
+                      <span className="block text-blue-600 mt-1">
+                        ℹ️ This merged room contains main area and sub-areas. Materials apply to main area only.
+                      </span>
+                    )}
+                    {selectedRoom.room.room_classification?.is_sub_area && 
+                     !selectedRoom.room.room_classification?.material_applicable && 
+                     !selectedRoom.room.is_merged && (
+                      <span className="block text-orange-600 mt-1">
+                        ⚠️ This sub-area typically doesn't require material configuration
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="p-6 space-y-6">
                   
-                  {/* Use Default Material Toggle */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Use Default Material
-                    </label>
-                    <select
-                      value={selectedRoom.room.use_default_material}
-                      onChange={(e) => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, 'use_default_material', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    >
-                      <option value="Y">Yes - Use Default Material</option>
-                      <option value="N">No - Custom Material</option>
-                    </select>
-                  </div>
+                  {/* Show merged room details */}
+                  {(selectedRoom.room.is_merged || selectedRoom.room.room_classification?.is_merged_room) && (
+                    <div className="bg-blue-50 p-4 rounded-md border border-blue-200 mb-4">
+                      <h4 className="text-sm font-medium text-blue-900 mb-3">Room Composition</h4>
+                      <div className="space-y-2 text-sm">
+                        {/* New structure with room_classification.composition */}
+                        {selectedRoom.room.room_classification?.composition && (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-blue-800">Main Area ({selectedRoom.room.room_classification.composition.main_area.type}):</span>
+                              <span className="font-medium">{selectedRoom.room.room_classification.composition.main_area.name} ({selectedRoom.room.room_classification.composition.main_area.area_sqft?.toFixed(1)} sq ft)</span>
+                            </div>
+                            {selectedRoom.room.room_classification.composition.sub_areas?.map((subArea, idx) => (
+                              <div key={idx} className="flex justify-between">
+                                <span className="text-blue-700">Sub-area ({subArea.type}):</span>
+                                <span className="font-medium">{subArea.name} ({subArea.area_sqft?.toFixed(1)} sq ft) {!subArea.material_applicable && <span className="text-orange-600">- No materials</span>}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                        
+                        {/* Legacy structure support */}
+                        {!selectedRoom.room.room_classification?.composition && (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-blue-800">Main Area:</span>
+                              <span className="font-medium">{selectedRoom.room.name} ({selectedRoom.room.main_area?.measurements?.floor_area_sqft?.toFixed(1)} sq ft)</span>
+                            </div>
+                            {selectedRoom.room.sub_areas?.map((subArea, idx) => (
+                              <div key={idx} className="flex justify-between">
+                                <span className="text-blue-700">Sub-area ({subArea.type}):</span>
+                                <span className="font-medium">{subArea.measurements?.floor_area_sqft?.toFixed(1)} sq ft {!subArea.material_applicable && <span className="text-orange-600">- No materials</span>}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                        
+                        <div className="pt-2 border-t border-blue-200 flex justify-between font-medium">
+                          <span className="text-blue-900">Total Area:</span>
+                          <span>{selectedRoom.room.total_measurements?.floor_area_sqft?.toFixed(1) || 'Calculating...'} sq ft</span>
+                        </div>
+                        
+                        {/* Material application note */}
+                        <div className="pt-2 border-t border-blue-200 text-xs text-blue-700">
+                          💡 Materials are applied to main area only. Sub-areas may have different material requirements.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Material Configuration - Hide for non-applicable sub-areas */}
+                  {selectedRoom.room.room_classification?.is_sub_area && 
+                   !selectedRoom.room.room_classification?.material_applicable &&
+                   !selectedRoom.room.is_merged ? (
+                    <div className="text-center py-8">
+                      <div className="text-gray-400 mb-4">
+                        <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                      </div>
+                      <h4 className="text-lg font-medium text-gray-900 mb-2">Material Configuration Not Required</h4>
+                      <p className="text-gray-600 mb-4">
+                        This {selectedRoom.room.room_classification?.sub_area_type} area typically doesn't require material configuration.
+                      </p>
+                      <button
+                        onClick={() => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, 'use_default_material', 'N')}
+                        className="text-sm text-blue-600 hover:text-blue-800 underline"
+                      >
+                        Override and configure materials anyway
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Use Default Material Toggle */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Use Default Material
+                        </label>
+                        <select
+                          value={selectedRoom.room.use_default_material}
+                          onChange={(e) => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, 'use_default_material', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        >
+                          <option value="Y">Yes - Use Default Material</option>
+                          <option value="N">No - Custom Material</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
 
                   {/* Material Overrides - Show only if not using default material */}
                   {selectedRoom.room.use_default_material === 'N' && (
@@ -434,7 +744,7 @@ const MaterialScope = () => {
                         {Object.entries(defaultScope.material).map(([key, defaultValue]) => {
                           const currentValue = selectedRoom.room.material_override[key] || '';
                           const materialToCheck = currentValue || defaultValue;
-                          const showUnderlayment = needsUnderlayment(materialToCheck);
+                          const showUnderlayment = currentValue !== 'N/A' && needsUnderlayment(materialToCheck);
                           const currentUnderlayment = selectedRoom.room.material_underlayment_override?.[key] || '';
                           const defaultUnderlayment = defaultScope.material_underlayment?.[key] || '';
                           
@@ -452,7 +762,18 @@ const MaterialScope = () => {
                                     className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white"
                                     placeholder={`Default: ${defaultValue}`}
                                   />
-                                  {currentValue && (
+                                  <button
+                                    onClick={() => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, `material_override.${key}`, 'N/A')}
+                                    className={`px-3 py-2 text-sm rounded-md border ${
+                                      currentValue === 'N/A' 
+                                        ? 'bg-gray-500 text-white border-gray-500' 
+                                        : 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200'
+                                    }`}
+                                    title="이 방에 해당 요소가 없음"
+                                  >
+                                    N/A
+                                  </button>
+                                  {currentValue && currentValue !== 'N/A' && (
                                     <button
                                       onClick={() => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, `material_override.${key}`, '')}
                                       className="text-sm text-red-600 hover:text-red-800 px-3 py-2"
@@ -463,6 +784,9 @@ const MaterialScope = () => {
                                 </div>
                                 {!currentValue && (
                                   <p className="text-xs text-gray-500 mt-1">Using default: {defaultValue}</p>
+                                )}
+                                {currentValue === 'N/A' && (
+                                  <p className="text-xs text-orange-600 mt-1">이 방에는 해당 요소가 없습니다</p>
                                 )}
                               </div>
                               
@@ -480,7 +804,18 @@ const MaterialScope = () => {
                                       className="flex-1 px-3 py-2 border border-blue-300 rounded-md bg-blue-50"
                                       placeholder={defaultUnderlayment ? `Default: ${defaultUnderlayment}` : "e.g., 6mm foam pad"}
                                     />
-                                    {currentUnderlayment && (
+                                    <button
+                                      onClick={() => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, `material_underlayment_override.${key}`, 'N/A')}
+                                      className={`px-3 py-2 text-sm rounded-md border ${
+                                        currentUnderlayment === 'N/A' 
+                                          ? 'bg-gray-500 text-white border-gray-500' 
+                                          : 'bg-blue-100 text-blue-700 border-blue-300 hover:bg-blue-200'
+                                      }`}
+                                      title="이 방에 underlayment가 필요하지 않음"
+                                    >
+                                      N/A
+                                    </button>
+                                    {currentUnderlayment && currentUnderlayment !== 'N/A' && (
                                       <button
                                         onClick={() => updateRoom(selectedRoom.locationIndex, selectedRoom.roomIndex, `material_underlayment_override.${key}`, '')}
                                         className="text-sm text-red-600 hover:text-red-800 px-3 py-2"
@@ -491,6 +826,9 @@ const MaterialScope = () => {
                                   </div>
                                   {!currentUnderlayment && defaultUnderlayment && (
                                     <p className="text-xs text-blue-600 mt-1">Using default: {defaultUnderlayment}</p>
+                                  )}
+                                  {currentUnderlayment === 'N/A' && (
+                                    <p className="text-xs text-orange-600 mt-1">이 방에는 underlayment가 필요하지 않습니다</p>
                                   )}
                                 </div>
                               )}
@@ -527,6 +865,17 @@ const MaterialScope = () => {
           </button>
         </div>
       </div>
+
+      {/* Material Analysis Modal */}
+      <MaterialAnalysisModal
+        isOpen={isAnalysisModalOpen}
+        onClose={() => setIsAnalysisModalOpen(false)}
+        onApplyResults={handleAnalysisResults}
+        roomType={getRoomTypeContext()}
+        analysisContext={{
+          focusTypes: ['floor', 'wall', 'ceiling', 'baseboard', 'quarter_round']
+        }}
+      />
     </div>
   );
 };

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createClient } from '@supabase/supabase-js';
 import { createSession } from '../utils/api';
+import { buildApiUrl, API_CONFIG } from '../config/api';
 import { loadGoogleMapsAPI } from '../utils/googleMaps';
 import logger from '../utils/logger';
 
@@ -267,7 +268,7 @@ const CreateProject = () => {
       };
 
       // 세션 생성 (회사 정보 포함)
-      const response = await fetch('http://localhost:8001/api/pre-estimate/session', {
+      const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.PRE_ESTIMATE.SESSION), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

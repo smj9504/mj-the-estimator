@@ -1,7 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const OpeningEditor = ({ openings = [], onChange, roomName = "" }) => {
   const [editingOpenings, setEditingOpenings] = useState(openings);
+
+  // Update internal state when openings prop changes (room selection)
+  useEffect(() => {
+    setEditingOpenings(openings);
+  }, [openings]);
 
   const openingTypes = [
     { value: 'door', label: 'Door', color: 'bg-blue-100 text-blue-800' },

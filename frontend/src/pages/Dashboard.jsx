@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../utils/api';
+import { buildApiUrl, API_CONFIG } from '../config/api';
 import logger from '../utils/logger';
 
 const Dashboard = () => {
@@ -117,7 +118,7 @@ const Dashboard = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:8001/api/pre-estimate/projects/${sessionId}`, {
+      const response = await fetch(buildApiUrl(`${API_CONFIG.ENDPOINTS.PRE_ESTIMATE.PROJECTS}/${sessionId}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -198,7 +199,7 @@ const Dashboard = () => {
       
       if (response && response.data && response.data.success) {
         // Download the file
-        const downloadUrl = `http://localhost:8001${response.data.download_url}`;
+        const downloadUrl = buildApiUrl(response.data.download_url);
         const link = document.createElement('a');
         link.href = downloadUrl;
         link.download = `final_estimate_${sessionId}.json`;
@@ -223,7 +224,7 @@ const Dashboard = () => {
       
       if (response && response.data && response.data.success) {
         // Download the file
-        const downloadUrl = `http://localhost:8001${response.data.download_url}`;
+        const downloadUrl = buildApiUrl(response.data.download_url);
         const link = document.createElement('a');
         link.href = downloadUrl;
         link.download = `demolition_scope_${sessionId}.json`;
