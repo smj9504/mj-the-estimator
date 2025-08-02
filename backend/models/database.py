@@ -78,6 +78,56 @@ def init_database():
             FOREIGN KEY (session_id) REFERENCES pre_estimate_sessions(session_id)
         )''')
         
+        # Material scope data table for auto-save
+        cursor.execute('''CREATE TABLE IF NOT EXISTS material_scope_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT UNIQUE,
+            scope_data TEXT,
+            room_openings TEXT,
+            merged_rooms TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES pre_estimate_sessions(session_id)
+        )''')
+        
+        # Progress tracking table for auto-save
+        cursor.execute('''CREATE TABLE IF NOT EXISTS pre_estimate_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT UNIQUE,
+            current_step TEXT,
+            step_statuses TEXT,
+            last_saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES pre_estimate_sessions(session_id)
+        )''')
+        
+        # Demo AI Analysis table
+        cursor.execute('''CREATE TABLE IF NOT EXISTS demo_ai_analysis (
+            analysis_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            room_id TEXT NOT NULL,
+            analysis_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            model_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            images TEXT NOT NULL,
+            ai_raw_response TEXT NOT NULL,
+            ai_parsed_results TEXT NOT NULL,
+            user_modifications TEXT,
+            user_feedback TEXT,
+            quality_score REAL DEFAULT 0.8,
+            is_verified BOOLEAN DEFAULT 0,
+            is_applied BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Create indices for demo_ai_analysis
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_project ON demo_ai_analysis(project_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_session ON demo_ai_analysis(session_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_quality ON demo_ai_analysis(quality_score)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_timestamp ON demo_ai_analysis(analysis_timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_verified ON demo_ai_analysis(is_verified)')
+        
         # Migrate existing tables - add new jobsite columns if they don't exist
         try:
             # Check if old jobsite column exists and new columns don't

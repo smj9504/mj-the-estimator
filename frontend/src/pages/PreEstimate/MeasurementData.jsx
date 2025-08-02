@@ -23,6 +23,7 @@ const MeasurementData = () => {
   const [editMode, setEditMode] = useState(false);
   const [editableData, setEditableData] = useState(null);
   const [editingOpening, setEditingOpening] = useState(null); // { locationIndex, roomIndex, openingIndex } or null
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle', 'saving', 'success', 'error'
   
   // Progress tracking states
   const [processingProgress, setProcessingProgress] = useState({
@@ -42,24 +43,54 @@ const MeasurementData = () => {
     }
   }, [sessionId, sessionData]);
 
-  // Load existing parsed data from session storage on page load
+  // Load existing parsed data from session storage or API on page load
   useEffect(() => {
-    if (sessionId) {
-      const storedData = sessionStorage.getItem(`measurementData_${sessionId}`);
-      if (storedData) {
-        try {
-          const parsedStoredData = JSON.parse(storedData);
+    const loadExistingData = async () => {
+      if (sessionId) {
+        let parsedStoredData = null;
+        const storedData = sessionStorage.getItem(`measurementData_${sessionId}`);
+        
+        if (storedData) {
+          // Load from sessionStorage
+          try {
+            parsedStoredData = JSON.parse(storedData);
+            logger.info('Measurement Data: Loaded existing data from sessionStorage', {
+              dataLength: parsedStoredData.length,
+              sessionId
+            });
+          } catch (error) {
+            logger.error('Error parsing stored measurement data', error);
+          }
+        } else {
+          // Fallback: load from API
+          logger.info('Measurement Data: No data in sessionStorage, trying API...');
+          try {
+            const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+            if (response.ok) {
+              const apiData = await response.json();
+              if (apiData.success && apiData.data) {
+                parsedStoredData = apiData.data;
+                // Store in sessionStorage for subsequent use
+                sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(parsedStoredData));
+                logger.info('Measurement Data: Loaded existing data from API', {
+                  dataLength: parsedStoredData.length,
+                  sessionId
+                });
+              }
+            }
+          } catch (apiError) {
+            logger.info('Measurement Data: No existing data found in API (this is normal for new sessions)');
+          }
+        }
+        
+        if (parsedStoredData) {
           setParsedData(parsedStoredData);
           setEditableData(JSON.parse(JSON.stringify(parsedStoredData))); // Deep copy
-          logger.info('Loaded existing measurement data from session storage', {
-            dataLength: parsedStoredData.length,
-            sessionId
-          });
-        } catch (error) {
-          logger.error('Error loading stored measurement data', error);
         }
       }
-    }
+    };
+    
+    loadExistingData();
   }, [sessionId]);
 
   // Auto-process file when session becomes available
@@ -479,12 +510,14 @@ const MeasurementData = () => {
   };
 
   const mergeRoomsAsSubArea = (locationIndex, parentRoomIndex, subAreaRoomIndex) => {
+    console.log('🔄 Starting room merge:', { locationIndex, parentRoomIndex, subAreaRoomIndex });
     const newData = JSON.parse(JSON.stringify(editableData));
     const location = newData[locationIndex];
     
     if (location && location.rooms[parentRoomIndex] && location.rooms[subAreaRoomIndex]) {
       const parentRoom = location.rooms[parentRoomIndex];
       const subAreaRoom = location.rooms[subAreaRoomIndex];
+      console.log('📋 Merging rooms:', { parentRoom: parentRoom.name, subAreaRoom: subAreaRoom.name });
       
       // Convert to merged room structure - optimized with only essential fields
       const mergedRoom = {
@@ -537,7 +570,9 @@ const MeasurementData = () => {
       }
     }
     
+    console.log('✅ Room merge completed, updating editableData');
     setEditableData(newData);
+    console.log('📊 New editableData set:', newData);
   };
 
   const unmergeRoom = (locationIndex, roomIndex) => {
@@ -887,20 +922,79 @@ const MeasurementData = () => {
     }
   };
 
-  const saveChanges = () => {
-    setParsedData(JSON.parse(JSON.stringify(editableData)));
-    sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(editableData));
+  const saveChanges = async () => {
+    console.log('💾 Starting save changes process');
+    console.log('📊 Current editableData:', editableData);
+    setSaveStatus('saving');
     
-    // Dispatch custom event for same-window components to detect the change
-    window.dispatchEvent(new CustomEvent('customStorageChange', {
-      detail: {
-        key: `measurementData_${sessionId}`,
-        newValue: JSON.stringify(editableData)
+    try {
+      // Update local state first
+      setParsedData(JSON.parse(JSON.stringify(editableData)));
+      sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(editableData));
+      console.log('✅ Updated sessionStorage and parsedData');
+      
+      // Dispatch custom event for same-window components to detect the change
+      window.dispatchEvent(new CustomEvent('customStorageChange', {
+        detail: {
+          key: `measurementData_${sessionId}`,
+          newValue: JSON.stringify(editableData)
+        }
+      }));
+      
+      // Save to database via API (manual save)
+      const requestBody = {
+        measurementData: editableData
+      };
+      
+      console.log('📤 Sending to API:', requestBody);
+      console.log('📊 Request body size:', JSON.stringify(requestBody).length, 'characters');
+      
+      const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/save/${sessionId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ API Error Response:', errorText);
+        throw new Error(`API Error: ${response.status} ${response.statusText} - ${errorText}`);
       }
-    }));
-    
-    setEditMode(false);
-    logger.info('Room changes saved', { sessionId, totalRooms: editableData?.reduce((total, loc) => total + (loc.rooms?.length || 0), 0) });
+      
+      const result = await response.json();
+      console.log('🎉 API save response:', result);
+      logger.info('Room changes saved to database', { 
+        sessionId, 
+        totalRooms: editableData?.reduce((total, loc) => total + (loc.rooms?.length || 0), 0),
+        success: result.success 
+      });
+      
+      setSaveStatus('success');
+      setEditMode(false);
+      console.log('✅ Save completed successfully');
+      
+      // Clear success status after 3 seconds
+      setTimeout(() => {
+        setSaveStatus('idle');
+      }, 3000);
+      
+    } catch (error) {
+      logger.error('Error saving room changes to database:', error);
+      console.error('Failed to save changes to database:', error);
+      
+      setSaveStatus('error');
+      setEditMode(false);
+      
+      // Show user-friendly error message
+      alert('변경사항이 일부만 저장되었습니다. 데이터베이스 저장에 실패했지만 현재 세션에서는 변경사항이 유지됩니다.');
+      
+      // Clear error status after 3 seconds
+      setTimeout(() => {
+        setSaveStatus('idle');
+      }, 3000);
+    }
   };
 
   const cancelChanges = () => {
@@ -1277,9 +1371,17 @@ const MeasurementData = () => {
                 <>
                   <button
                     onClick={saveChanges}
+                    disabled={saveStatus === 'saving'}
                     className={`${styles.button} ${styles.buttonPrimary} ${styles.buttonSmall}`}
+                    style={{
+                      opacity: saveStatus === 'saving' ? 0.6 : 1,
+                      cursor: saveStatus === 'saving' ? 'not-allowed' : 'pointer'
+                    }}
                   >
-                    💾 Save Changes
+                    {saveStatus === 'saving' && '⏳ Saving...'}
+                    {saveStatus === 'success' && '✅ Saved!'}
+                    {saveStatus === 'error' && '❌ Error'}
+                    {saveStatus === 'idle' && '💾 Save Changes'}
                   </button>
                   <button
                     onClick={cancelChanges}

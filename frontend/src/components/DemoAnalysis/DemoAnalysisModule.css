@@ -1,0 +1,144 @@
+/* DemoAnalysisModule.css */
+
+.demo-analysis-module {
+  position: relative;
+}
+
+/* Progress indicator */
+.analysis-progress {
+  margin-bottom: 2rem;
+}
+
+.analysis-progress .step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  flex: 1;
+}
+
+.analysis-progress .step::before {
+  content: '';
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  right: -50%;
+  height: 2px;
+  background-color: #e5e7eb;
+  z-index: 0;
+}
+
+.analysis-progress .step:last-child::before {
+  display: none;
+}
+
+.analysis-progress .step.completed::before {
+  background-color: #7c3aed;
+}
+
+.step-number {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: #e5e7eb;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  z-index: 1;
+  transition: all 0.3s ease;
+}
+
+.step.active .step-number {
+  background-color: #7c3aed;
+  color: white;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.2);
+}
+
+.step.completed .step-number {
+  background-color: #7c3aed;
+  color: white;
+}
+
+.step-label {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: #6b7280;
+  text-align: center;
+}
+
+.step.active .step-label {
+  color: #7c3aed;
+  font-weight: 500;
+}
+
+.step.completed .step-label {
+  color: #4b5563;
+}
+
+/* Upload dropzone */
+.upload-dropzone {
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Image grid aspect ratio */
+.aspect-w-1 {
+  position: relative;
+  padding-bottom: 100%;
+}
+
+.aspect-h-1 {
+  position: absolute;
+  inset: 0;
+}
+
+/* Analysis viewer */
+.analysis-viewer {
+  position: relative;
+}
+
+/* Area editor modal */
+.area-editor-modal {
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Image preview styles */
+.image-preview {
+  display: block !important;
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  background-color: transparent !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .analysis-progress {
+    overflow-x: auto;
+    padding-bottom: 1rem;
+  }
+
+  .analysis-progress > div {
+    min-width: 400px;
+  }
+
+  .step-label {
+    font-size: 0.75rem;
+  }
+}

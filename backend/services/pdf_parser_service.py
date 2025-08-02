@@ -4,6 +4,7 @@ from typing import Dict, List, Any, Optional
 from PyPDF2 import PdfReader
 from io import BytesIO
 from utils.logger import logger
+from utils.prompts import PDF_MEASUREMENT_EXTRACTION_PROMPT
 
 class PDFParserService:
     """Service for parsing and extracting measurement data from PDF documents"""
@@ -34,8 +35,8 @@ class PDFParserService:
         # Enhanced patterns for insurance estimates (Travelers, etc.)
         patterns = {
             'room_with_height': r'([A-Za-z\s]+)\s*Height:\s*([^\n]*?)(?:\n|$)',
-            'wall_area': r'(\d+(?:\.\d+)?)\s*SF\s*Walls(?:\s*&\s*Ceiling)?',
-            'ceiling_area': r'(\d+(?:\.\d+)?)\s*SF\s*(?:Walls\s*&\s*)?Ceiling',
+            'wall_area': r'(\d+(?:\.\d+)?)\s*SF\s*Walls(?!\s*&\s*Ceiling)',
+            'ceiling_area': r'(\d+(?:\.\d+)?)\s*SF\s*Ceiling(?!\s*&\s*Walls)',
             'floor_area': r'(\d+(?:\.\d+)?)\s*SF\s*Floor(?:\s|$)',
             'wall_ceiling_combined': r'(\d+(?:\.\d+)?)\s*SF\s*Walls\s*&\s*Ceiling',
             'floor_perimeter': r'(\d+(?:\.\d+)?)\s*LF\s*Floor\s*Perimeter',
@@ -125,12 +126,17 @@ class PDFParserService:
             "openings": []
         }
         
-        # Extract wall area
+        # Extract combined walls & ceiling first (to avoid conflicts with individual patterns)
+        wall_ceiling_match = re.search(patterns['wall_ceiling_combined'], context_text)
+        if wall_ceiling_match:
+            measurements["walls_and_ceiling_area_sqft"] = round(float(wall_ceiling_match.group(1)), 2)
+        
+        # Extract wall area (excluding combined patterns)
         wall_match = re.search(patterns['wall_area'], context_text)
         if wall_match:
             measurements["wall_area_sqft"] = round(float(wall_match.group(1)), 2)
         
-        # Extract ceiling area
+        # Extract ceiling area (excluding combined patterns)
         ceiling_match = re.search(patterns['ceiling_area'], context_text)
         if ceiling_match:
             measurements["ceiling_area_sqft"] = round(float(ceiling_match.group(1)), 2)
@@ -140,11 +146,8 @@ class PDFParserService:
         if floor_match:
             measurements["floor_area_sqft"] = round(float(floor_match.group(1)), 2)
         
-        # Extract combined walls & ceiling if available
-        wall_ceiling_match = re.search(patterns['wall_ceiling_combined'], context_text)
-        if wall_ceiling_match:
-            measurements["walls_and_ceiling_area_sqft"] = round(float(wall_ceiling_match.group(1)), 2)
-        else:
+        # Calculate combined walls & ceiling if not already extracted
+        if measurements["walls_and_ceiling_area_sqft"] == 0.0:
             measurements["walls_and_ceiling_area_sqft"] = round(measurements["wall_area_sqft"] + measurements["ceiling_area_sqft"], 2)
         
         # Extract floor perimeter
@@ -489,20 +492,8 @@ class PDFParserService:
             
             logger.info("Using AI fallback for PDF processing")
             
-            # Create prompt for AI to extract room measurements
-            prompt = f"""
-            Extract interior room measurements from this insurance estimate PDF text.
-            Focus only on interior rooms and their measurements.
-            
-            Return JSON format with locations and rooms containing:
-            - name: room name
-            - measurements: with wall_area_sqft, ceiling_area_sqft, floor_area_sqft, height, 
-              floor_perimeter_lf, ceiling_perimeter_lf, walls_and_ceiling_area_sqft, 
-              flooring_area_sy, and openings (doors/windows with sizes)
-            
-            PDF Text:
-            {pdf_text[:3000]}  # Limit text to avoid token limits
-            """
+            # Create prompt for AI to extract room measurements using template
+            prompt = PDF_MEASUREMENT_EXTRACTION_PROMPT.format(pdf_text=pdf_text[:3000])
             
             # Use AI service to extract measurements
             ai_result = ai_service.process_text(prompt)

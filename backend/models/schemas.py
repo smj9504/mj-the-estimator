@@ -17,6 +17,9 @@ class MeasurementDataResponse(BaseModel):
     parsed_json: Dict[str, Any]
     created_at: datetime
 
+class MeasurementSaveRequest(BaseModel):
+    measurementData: List[Dict[str, Any]]  # measurementData is actually a list of locations
+
 class DemoScopeRequest(BaseModel):
     session_id: Optional[str] = None
     input_text: str
@@ -229,3 +232,9 @@ class FinalEstimateResponse(BaseModel):
     success: bool
     data: List[Any]  # Will contain mixed types: header, default_scope, locations
     download_url: Optional[str] = None
+
+# AI Area Calculation schemas
+class AreaCalculationRequest(BaseModel):
+    description: str
+    surface_type: str
+    existing_dimensions: Optional[Dict[str, float]] = None

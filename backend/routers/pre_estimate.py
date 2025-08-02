@@ -10,7 +10,8 @@ from models.schemas import (
     WorkScopeRequest, WorkScopeResponse, PreEstimateSessionResponse,
     CompletePreEstimateResponse, RoomOpeningUpdate, RoomOpeningResponse,
     ProjectUpdateRequest, ProjectListResponse, FinalEstimateResponse,
-    CreateProjectRequest, CompanyInfo, JobsiteAddress
+    CreateProjectRequest, CompanyInfo, JobsiteAddress, MeasurementSaveRequest,
+    AreaCalculationRequest
 )
 from services.ai_service import ai_service
 from services.ocr_service import ocr_service
@@ -150,6 +151,33 @@ async def get_session(session_id: str):
         logger.error(f"Error getting session: {e}", exc_info=True)
         logger.error(f"Session ID: {session_id}")
         raise HTTPException(status_code=500, detail=f"Failed to get session: {str(e)}")
+
+@router.get("/measurement/data/{session_id}")
+async def get_measurement_data(session_id: str):
+    """Get measurement data for a session"""
+    try:
+        # Get measurement data from database
+        measurements = execute_query(
+            "SELECT parsed_json FROM measurement_data WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (session_id,)
+        )
+        
+        if not measurements or not measurements[0]['parsed_json']:
+            raise HTTPException(status_code=404, detail="No measurement data found for session")
+        
+        # Parse and return the data
+        measurement_data = json.loads(measurements[0]['parsed_json'])
+        
+        return {
+            "success": True,
+            "data": measurement_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting measurement data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get measurement data")
 
 @router.post("/measurement")
 async def process_measurement_data(
@@ -779,3 +807,346 @@ async def download_final_estimate(filename: str):
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
+# Auto-save endpoints
+@router.put("/auto-save/material-scope/{session_id}")
+async def auto_save_material_scope(session_id: str, data: dict):
+    """Auto-save material scope data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Extract data
+        scope_data = json.dumps(data.get('scopeData', {}))
+        room_openings = json.dumps(data.get('roomOpenings', {}))
+        merged_rooms = json.dumps(data.get('mergedRooms', {}))
+        
+        # Check if material scope data exists
+        existing_data = execute_query(
+            "SELECT * FROM material_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if existing_data:
+            # Update existing data
+            execute_update(
+                """UPDATE material_scope_data 
+                   SET scope_data = ?, room_openings = ?, merged_rooms = ?, 
+                       updated_at = CURRENT_TIMESTAMP 
+                   WHERE session_id = ?""",
+                (scope_data, room_openings, merged_rooms, session_id)
+            )
+        else:
+            # Insert new data
+            execute_insert(
+                """INSERT INTO material_scope_data 
+                   (session_id, scope_data, room_openings, merged_rooms) 
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, scope_data, room_openings, merged_rooms)
+            )
+        
+        return {"success": True, "message": "Material scope auto-saved"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error auto-saving material scope: {e}")
+        raise HTTPException(status_code=500, detail="Failed to auto-save material scope")
+
+@router.get("/auto-save/material-scope/{session_id}")
+async def get_saved_material_scope(session_id: str):
+    """Get saved material scope data"""
+    try:
+        # Get saved data
+        saved_data = execute_query(
+            "SELECT * FROM material_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not saved_data:
+            return {"scopeData": {}, "roomOpenings": {}, "mergedRooms": {}}
+        
+        data = saved_data[0]
+        return {
+            "scopeData": json.loads(data['scope_data']) if data['scope_data'] else {},
+            "roomOpenings": json.loads(data['room_openings']) if data['room_openings'] else {},
+            "mergedRooms": json.loads(data['merged_rooms']) if data['merged_rooms'] else {},
+            "lastSaved": data['updated_at']
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting saved material scope: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get saved material scope")
+
+@router.put("/auto-save/progress/{session_id}")
+async def auto_save_progress(session_id: str, data: dict):
+    """Auto-save progress data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        current_step = data.get('currentStep', '')
+        step_statuses = json.dumps(data.get('stepStatuses', {}))
+        
+        # Check if progress data exists
+        existing_progress = execute_query(
+            "SELECT * FROM pre_estimate_progress WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if existing_progress:
+            # Update existing progress
+            execute_update(
+                """UPDATE pre_estimate_progress 
+                   SET current_step = ?, step_statuses = ?, 
+                       last_saved_at = CURRENT_TIMESTAMP 
+                   WHERE session_id = ?""",
+                (current_step, step_statuses, session_id)
+            )
+        else:
+            # Insert new progress
+            execute_insert(
+                """INSERT INTO pre_estimate_progress 
+                   (session_id, current_step, step_statuses) 
+                   VALUES (?, ?, ?)""",
+                (session_id, current_step, step_statuses)
+            )
+        
+        return {"success": True, "message": "Progress auto-saved"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error auto-saving progress: {e}")
+        raise HTTPException(status_code=500, detail="Failed to auto-save progress")
+
+@router.get("/auto-save/progress/{session_id}")
+async def get_saved_progress(session_id: str):
+    """Get saved progress data"""
+    try:
+        # Get saved progress
+        saved_progress = execute_query(
+            "SELECT * FROM pre_estimate_progress WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not saved_progress:
+            return {"currentStep": "", "stepStatuses": {}}
+        
+        progress = saved_progress[0]
+        return {
+            "currentStep": progress['current_step'] or "",
+            "stepStatuses": json.loads(progress['step_statuses']) if progress['step_statuses'] else {},
+            "lastSaved": progress['last_saved_at']
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting saved progress: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get saved progress")
+
+@router.put("/auto-save/measurement/{session_id}")
+async def auto_save_measurement_edits(session_id: str, request: MeasurementSaveRequest):
+    """Auto-save measurement data edits (room merges, opening updates)"""
+    try:
+        logger.info(f"Auto-saving measurement edits for session {session_id}")
+        logger.debug(f"Request data: {request}")
+        
+        # Validate request data
+        if not request.measurementData:
+            raise HTTPException(status_code=400, detail="measurementData is required")
+        
+        # Get current measurement data
+        measurements = execute_query(
+            "SELECT * FROM measurement_data WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (session_id,)
+        )
+        
+        if not measurements:
+            raise HTTPException(status_code=404, detail="No measurement data found")
+        
+        # Update the measurement data with edits
+        edited_data = request.measurementData
+        
+        logger.debug(f"Updating measurement data for session {session_id}, record ID: {measurements[0]['id']}")
+        
+        execute_update(
+            "UPDATE measurement_data SET parsed_json = ? WHERE session_id = ? AND id = ?",
+            (json.dumps(edited_data), session_id, measurements[0]['id'])
+        )
+        
+        logger.info(f"Successfully auto-saved measurement edits for session {session_id}")
+        return {"success": True, "message": "Measurement edits auto-saved"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error auto-saving measurement edits for session {session_id}: {e}")
+        logger.error(f"Request data was: {request}")
+        raise HTTPException(status_code=500, detail=f"Failed to auto-save measurement edits: {str(e)}")
+
+@router.put("/measurement/save/{session_id}")
+async def save_measurement_edits(session_id: str, request: MeasurementSaveRequest):
+    """Save measurement data edits (manual save)"""
+    try:
+        logger.info(f"Saving measurement edits for session {session_id}")
+        logger.debug(f"Request data: {request}")
+        
+        # Validate request data
+        if not request.measurementData:
+            raise HTTPException(status_code=400, detail="measurementData is required")
+        
+        # Get current measurement data
+        measurements = execute_query(
+            "SELECT * FROM measurement_data WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (session_id,)
+        )
+        
+        if not measurements:
+            raise HTTPException(status_code=404, detail="No measurement data found")
+        
+        # Update the measurement data with edits
+        edited_data = request.measurementData
+        
+        logger.debug(f"Updating measurement data for session {session_id}, record ID: {measurements[0]['id']}")
+        
+        execute_update(
+            "UPDATE measurement_data SET parsed_json = ? WHERE session_id = ? AND id = ?",
+            (json.dumps(edited_data), session_id, measurements[0]['id'])
+        )
+        
+        logger.info(f"Successfully saved measurement edits for session {session_id}")
+        return {"success": True, "message": "Measurement edits saved successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving measurement edits for session {session_id}: {e}")
+        logger.error(f"Request data was: {request}")
+        raise HTTPException(status_code=500, detail=f"Failed to save measurement edits: {str(e)}")
+
+# Demo Scope Auto-save endpoints
+@router.put("/auto-save/demo-scope/{session_id}")
+async def auto_save_demo_scope(session_id: str, data: dict):
+    """Auto-save demo scope data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        demo_scope_data = json.dumps(data)
+        
+        # Check if demo scope data exists
+        existing_demo = execute_query(
+            "SELECT * FROM demo_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if existing_demo:
+            # Update existing demo scope data
+            execute_update(
+                "UPDATE demo_scope_data SET parsed_json = ? WHERE session_id = ?",
+                (demo_scope_data, session_id)
+            )
+        else:
+            # Insert new demo scope data
+            execute_insert(
+                "INSERT INTO demo_scope_data (session_id, parsed_json) VALUES (?, ?)",
+                (session_id, demo_scope_data)
+            )
+        
+        return {"success": True, "message": "Demo scope auto-saved"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error auto-saving demo scope: {e}")
+        raise HTTPException(status_code=500, detail="Failed to auto-save demo scope")
+
+@router.get("/auto-save/demo-scope/{session_id}")
+async def get_saved_demo_scope(session_id: str):
+    """Get saved demo scope data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        demo_scope = execute_query(
+            "SELECT * FROM demo_scope_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if demo_scope:
+            parsed_data = demo_scope[0]['parsed_json']
+            return {
+                "success": True,
+                "demoScopeData": json.loads(parsed_data) if parsed_data else {},
+                "lastUpdated": demo_scope[0]['created_at']  # Use created_at since there's no updated_at column
+            }
+        else:
+            return {
+                "success": True,
+                "demoScopeData": {},
+                "lastUpdated": None
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting saved demo scope: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get saved demo scope")
+
+@router.post("/calculate-area")
+async def calculate_partial_area(request: AreaCalculationRequest):
+    """Calculate area for partial descriptions using AI"""
+    try:
+        logger.info(f"🎯 API: Received area calculation request")
+        logger.info(f"📝 Description: '{request.description}'")
+        logger.info(f"🏷️ Surface type: '{request.surface_type}'")
+        logger.info(f"📐 Existing dimensions: {request.existing_dimensions}")
+        
+        # Use AI service to calculate area from description
+        logger.info("🚀 Calling AI service for area calculation...")
+        calculated_area = ai_service.calculate_area_from_description(
+            description=request.description,
+            surface_type=request.surface_type,
+            existing_dimensions=request.existing_dimensions
+        )
+        
+        logger.info(f"📊 AI service returned: {calculated_area}")
+        
+        response_data = {
+            "success": True,
+            "calculated_area": calculated_area,
+            "description": request.description,
+            "surface_type": request.surface_type
+        }
+        
+        logger.info(f"✅ API: Sending response: {response_data}")
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"❌ API: Error calculating area: {e}")
+        logger.error(f"🔍 Error type: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail=f"Failed to calculate area: {str(e)}")

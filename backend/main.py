@@ -3,18 +3,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 import sqlite3
-from google.cloud import vision
 import os
 from config import settings
+
+# Optional Google Cloud Vision import
+try:
+    from google.cloud import vision
+    VISION_AVAILABLE = True
+except ImportError:
+    VISION_AVAILABLE = False
+    vision = None
 
 # Import routers
 from routers.pre_estimate import router as pre_estimate_router
 from routers.material_analysis import router as material_analysis_router
+from routers.demo_analysis import router as demo_analysis_router
 from models.database import init_database
 
 # Import our custom logger
 from utils.logger import logger
 from middleware.logging_middleware import LoggingRoute, log_request_body
+from utils.prompts import LEGACY_SCOPE_PROMPT
 
 app = FastAPI(
     title="MJ Estimator API", 
@@ -28,6 +37,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173", 
         "http://localhost:5174", 
+        "http://localhost:5175",
         f"http://localhost:{settings.port}"
     ],
     allow_credentials=True,
@@ -44,6 +54,7 @@ init_database()
 # Include routers
 app.include_router(pre_estimate_router)
 app.include_router(material_analysis_router, prefix="/api")
+app.include_router(demo_analysis_router)
 
 # Startup and shutdown events
 @app.on_event("startup")
@@ -62,7 +73,7 @@ try:
     environment = os.getenv('ENVIRONMENT', 'development')
     if environment == 'production' and os.getenv('OPENAI_API_KEY'):
         from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model="gpt-3.5-turbo", api_key=os.getenv('OPENAI_API_KEY'))
+        llm = ChatOpenAI(model=settings.openai_text_model, api_key=os.getenv('OPENAI_API_KEY'))
     else:
         llm = OllamaLLM(model="gemma3")
 except Exception as e:
@@ -73,11 +84,8 @@ except Exception as e:
 conn = sqlite3.connect("db/estimate.db")
 c = conn.cursor()
 
-# 내장 프롬프트
-scope_prompt = PromptTemplate(
-    input_variables=["scope"],
-    template="작업 범위: {scope}\n주요 작업 항목을 나열하고 간단히 설명해:"
-)
+# Use imported legacy scope prompt
+scope_prompt = LEGACY_SCOPE_PROMPT
 
 @app.post("/step1-work-scope")
 async def step1_work_scope(scope: str = Form(...)):
@@ -98,6 +106,9 @@ async def confirm_step1(step_id: int, confirmed: bool = Form(...)):
 
 @app.post("/ocr")
 async def ocr_process(file: UploadFile = File(...)):
+    if not VISION_AVAILABLE:
+        return {"error": "Google Cloud Vision is not available"}
+    
     try:
         # Vision client를 사용할 때만 초기화
         vision_client = vision.ImageAnnotatorClient()

@@ -23,7 +23,8 @@ router = APIRouter()
 async def analyze_material_image(
     image: UploadFile = File(..., description="Image file to analyze"),
     analysis_focus: Optional[str] = Form(None, description="JSON array of material types to focus on"),  
-    room_type: Optional[str] = Form(None, description="Room type context")
+    room_type: Optional[str] = Form(None, description="Room type context"),
+    analysis_areas: Optional[str] = Form(None, description="JSON array of selected areas to analyze")
 ):
     """
     Analyze uploaded image to identify building materials
@@ -32,6 +33,7 @@ async def analyze_material_image(
         image: Image file (JPEG, PNG, WebP, BMP)
         analysis_focus: Optional JSON array of material types to focus on
         room_type: Optional room type for context (kitchen, bathroom, etc.)
+        analysis_areas: Optional JSON array of selected areas (polygons) to analyze
         
     Returns:
         MaterialAnalysisResponse with detected materials
@@ -61,19 +63,33 @@ async def analyze_material_image(
                     detail=f"Invalid analysis_focus format: {str(e)}"
                 )
         
+        # Parse analysis areas if provided
+        areas = None
+        if analysis_areas:
+            try:
+                areas = json.loads(analysis_areas)
+                logger.info(f"Analysis areas provided: {len(areas)} areas")
+            except json.JSONDecodeError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid analysis_areas format: {str(e)}"
+                )
+        
         logger.info(
             f"Starting material analysis for image: {image.filename}",
             image_size=len(image_data),
             content_type=image.content_type,
             focus_types=focus_types,
-            room_type=room_type
+            room_type=room_type,
+            analysis_areas=len(areas) if areas else 0
         )
         
         # Perform analysis
         result = image_analysis_service.analyze_materials(
             image_data=image_data,
             analysis_focus=focus_types,
-            room_type=room_type
+            room_type=room_type,
+            analysis_areas=areas
         )
         
         logger.info(

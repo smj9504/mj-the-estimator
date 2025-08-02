@@ -1,30 +1,60 @@
 import json
 import os
 from typing import Dict, List, Any
-from utils.prompts import MEASUREMENT_PROMPT, DEMO_SCOPE_PROMPT, WORK_SCOPE_PROMPT, TEXT_CLEANUP_PROMPT
+from dotenv import load_dotenv
+from utils.prompts import MEASUREMENT_PROMPT, DEMO_SCOPE_PROMPT, WORK_SCOPE_PROMPT, TEXT_CLEANUP_PROMPT, MATERIAL_ANALYSIS_VISION_PROMPT, AREA_CALCULATION_PROMPT
 from utils.logger import logger
 import time
 from services.measurement_processor import measurement_processor
 from services.room_calculator import calculation_engine
+from config import settings
+
+# Load environment variables at module level
+load_dotenv()
 
 class AIService:
     def __init__(self):
         self.llm = None
-        self.mock_mode = True
-        self.ai_provider = None
+        self.mock_mode = False
+        self.ai_provider = 'openai'
         self.progress_store = {}  # Store progress data for each session
+        
+        # Load AI model configurations from settings
+        self.models = {
+            'text': settings.openai_text_model,
+            'vision': settings.openai_vision_model,
+            'advanced': settings.openai_advanced_model
+        }
+        
+        logger.info(f"AI Models configured: {self.models}")
         
         # Environment-based AI provider selection
         environment = os.getenv('ENVIRONMENT', 'development').lower()
         
-        if environment == 'production':
+        # PRIORITY 1: Always use OpenAI if API key is available (for image analysis)
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if openai_api_key:
+            logger.info("OpenAI API key found - prioritizing OpenAI for image analysis")
             self._init_production_ai()
-        elif os.getenv('OLLAMA_HOST') or self._check_ollama_available():
+            return
+        
+        # PRIORITY 2: Production environment without OpenAI key
+        if environment == 'production':
+            logger.info("Production environment - attempting production AI initialization")
+            self._init_production_ai()
+            return
+        
+        # PRIORITY 3: Development environment - try Ollama
+        if os.getenv('OLLAMA_HOST') or self._check_ollama_available():
+            logger.info("OpenAI not available - falling back to Ollama for development")
             self._init_ollama()
-        else:
-            logger.info("No AI provider available, using mock mode", 
-                      ai_provider="mock", 
-                      mock_mode=True)
+            return
+        
+        # PRIORITY 4: No AI providers available
+        logger.info("No AI provider available, using mock mode", 
+                  ai_provider="mock", 
+                  mock_mode=True)
+        self.mock_mode = True
     
     def _init_production_ai(self):
         """Initialize production AI service (OpenAI/Claude)"""
@@ -33,7 +63,7 @@ class AIService:
             if openai_api_key:
                 from langchain_openai import ChatOpenAI
                 self.llm = ChatOpenAI(
-                    model="gpt-3.5-turbo",
+                    model=self.models['text'],
                     api_key=openai_api_key,
                     temperature=0.1
                 )
@@ -41,7 +71,7 @@ class AIService:
                 self.mock_mode = False
                 logger.info("AI Service initialized with OpenAI GPT-3.5-turbo",
                           ai_provider="openai",
-                          model="gpt-3.5-turbo")
+                          model=self.models['text'])
                 return
             
             claude_api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -591,17 +621,21 @@ class AIService:
         Returns:
             AI response as string
         """
+        logger.info(f"Image analysis - mock_mode: {self.mock_mode}, ai_provider: {self.ai_provider}")
+        
         if self.mock_mode:
             logger.info("Using mock mode for image analysis")
             return self._get_mock_image_analysis()
         
         try:
             if self.ai_provider == "openai":
+                logger.info("Using OpenAI for image analysis")
                 return self._analyze_image_openai(base64_image, prompt)
             elif self.ai_provider == "claude":
+                logger.info("Using Claude for image analysis") 
                 return self._analyze_image_claude(base64_image, prompt)
             else:
-                logger.warning("No image analysis provider available, using mock response")
+                logger.warning(f"No image analysis provider available (provider: {self.ai_provider}), using mock response")
                 return self._get_mock_image_analysis()
                 
         except Exception as e:
@@ -612,19 +646,30 @@ class AIService:
         """Analyze image using OpenAI GPT-4 Vision"""
         try:
             from langchain_openai import ChatOpenAI
+            import os
             
-            # Use GPT-4 Vision for image analysis
+            # Get API key
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                logger.error("OPENAI_API_KEY not found in environment variables")
+                raise ValueError("OPENAI_API_KEY is required for image analysis")
+            
+            # Use GPT-4o for image analysis (latest vision model)
             vision_model = ChatOpenAI(
-                model="gpt-4-vision-preview",
+                model=self.models['advanced'],
+                api_key=api_key,
                 max_tokens=1000,
                 temperature=0.1
             )
+            
+            # Create detailed prompt for material analysis using template
+            material_analysis_prompt = MATERIAL_ANALYSIS_VISION_PROMPT.format(base_prompt=prompt)
             
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "text", "text": material_analysis_prompt},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -713,6 +758,144 @@ class AIService:
                 "texture": "Smooth painted wood"
             }
         ]'''
+    
+    def calculate_area_from_description(self, description: str, surface_type: str, existing_dimensions: Dict[str, float] = None) -> float:
+        """Calculate area from text description using AI"""
+        logger.info(f"🎯 Starting area calculation - Description: '{description}', Surface: '{surface_type}'")
+        logger.info(f"📐 Existing dimensions: {existing_dimensions}")
+        
+        if self.mock_mode:
+            logger.info("🔧 Using mock mode for area calculation")
+            # Return a mock value based on surface type
+            mock_areas = {
+                'floor': 150.0,
+                'ceiling': 150.0, 
+                'wall': 120.0,
+                'countertop': 25.0,
+                'backsplash': 15.0,
+                'trim': 45.0,
+                'baseboard': 50.0,
+                'quarter_round': 40.0,
+                'door': 1.0,
+                'window': 2.0,
+                'cabinet': 3.0,
+                'vanity': 1.0,
+                'toilet': 1.0
+            }
+            mock_result = mock_areas.get(surface_type.lower(), 100.0)
+            logger.info(f"✅ Mock calculation result: {mock_result}")
+            return mock_result
+        
+        try:
+            logger.info(f"🤖 Using AI provider: {self.ai_provider}")
+            
+            # Create prompt for area calculation using template
+            existing_dims_text = f"Existing Room Dimensions (for reference): {existing_dimensions}" if existing_dimensions else ""
+            area_calculation_prompt = AREA_CALCULATION_PROMPT.format(
+                surface_type=surface_type,
+                description=description,
+                existing_dimensions=existing_dims_text
+            )
+            
+            logger.info("📝 Generated prompt for AI:")
+            logger.info(f"--- PROMPT START ---\n{area_calculation_prompt}\n--- PROMPT END ---")
+            
+            if self.ai_provider in ['openai', 'claude']:
+                logger.info("🔄 Calling OpenAI/Claude API...")
+                response = self.llm.invoke([{"role": "user", "content": area_calculation_prompt}])
+                result = response.content if hasattr(response, 'content') else str(response)
+            else:
+                logger.info("🔄 Calling Ollama API...")
+                result = self.llm.invoke(area_calculation_prompt)
+            
+            logger.info(f"🤖 Raw AI response: '{result}'")
+            
+            # Extract numeric value from response
+            try:
+                # Remove any non-numeric characters except decimal points
+                import re
+                numeric_match = re.search(r'(\d+\.?\d*)', str(result).strip())
+                if numeric_match:
+                    calculated_area = float(numeric_match.group(1))
+                    logger.info(f"✅ Successfully extracted and calculated area: {calculated_area}")
+                    return calculated_area
+                else:
+                    logger.warning(f"⚠️ Could not extract numeric value from AI response: '{result}'")
+                    logger.warning("🔍 AI response does not contain recognizable numbers")
+                    return 0.0
+            except (ValueError, AttributeError) as e:
+                logger.error(f"❌ Error parsing AI response to float: {e}")
+                logger.error(f"🔍 Problematic response: '{result}'")
+                return 0.0
+                
+        except Exception as e:
+            logger.error(f"❌ Critical error during AI area calculation: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"🔍 Error details: {str(e)}")
+            return 0.0
+
+# OpenAI Service for image analysis
+class OpenAIService:
+    def __init__(self):
+        self.api_key = os.getenv('OPENAI_API_KEY')
+        if not self.api_key:
+            logger.warning("OPENAI_API_KEY not found - image analysis will fail")
+        
+        # Load AI model configurations from settings
+        self.models = {
+            'text': settings.openai_text_model,
+            'vision': settings.openai_vision_model,
+            'advanced': settings.openai_advanced_model
+        }
+        
+        logger.info(f"OpenAIService models configured: {self.models}")
+    
+    async def analyze_images_for_demo(self, messages: List[Dict]) -> str:
+        """
+        Analyze images for demo scope detection using OpenAI Vision API
+        """
+        try:
+            import openai
+            
+            if not self.api_key:
+                raise Exception("OpenAI API key not available")
+            
+            client = openai.AsyncOpenAI(api_key=self.api_key)
+            
+            response = await client.chat.completions.create(
+                model=self.models['vision'],
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"OpenAI image analysis failed: {str(e)}")
+            # Return a fallback response for development
+            return """
+            {
+                "demolished_areas": [
+                    {
+                        "surface_type": "floor",
+                        "material": "tile",
+                        "description": "Kitchen floor tile removed in main area",
+                        "boundaries": [[100,200], [400,200], [400,500], [100,500]],
+                        "estimated_area_sqft": 45.5,
+                        "confidence": 0.75,
+                        "reference_objects": ["door", "outlet"]
+                    }
+                ],
+                "reference_objects": [
+                    {
+                        "type": "door",
+                        "boundaries": [[50,100], [86,184]],
+                        "estimated_dimensions": {"width_inches": 36, "height_inches": 84}
+                    }
+                ]
+            }
+            """
 
 # Global AI service instance
 ai_service = AIService()

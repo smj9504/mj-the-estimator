@@ -32,7 +32,8 @@ class ImageAnalysisService:
         self, 
         image_data: bytes, 
         analysis_focus: Optional[List[MaterialType]] = None,
-        room_type: Optional[str] = None
+        room_type: Optional[str] = None,
+        analysis_areas: Optional[List[dict]] = None
     ) -> MaterialAnalysisResponse:
         """
         Analyze image to identify building materials
@@ -41,6 +42,7 @@ class ImageAnalysisService:
             image_data: Raw image bytes
             analysis_focus: Specific material types to focus on
             room_type: Room context for better analysis
+            analysis_areas: Optional list of selected areas (polygons) to analyze
             
         Returns:
             MaterialAnalysisResponse with detected materials
@@ -72,7 +74,8 @@ class ImageAnalysisService:
             materials = self._analyze_with_ai(
                 base64_image, 
                 analysis_focus, 
-                room_type
+                room_type,
+                analysis_areas
             )
             
             # Calculate overall confidence
@@ -164,7 +167,8 @@ class ImageAnalysisService:
         self, 
         base64_image: str, 
         analysis_focus: Optional[List[MaterialType]], 
-        room_type: Optional[str]
+        room_type: Optional[str],
+        analysis_areas: Optional[List[dict]] = None
     ) -> List[MaterialAnalysisResult]:
         """Perform AI analysis of the image"""
         
@@ -179,11 +183,20 @@ class ImageAnalysisService:
         if room_type:
             room_context = f"This image is from a {room_type}. "
         
+        # Build areas context
+        areas_text = ""
+        if analysis_areas and len(analysis_areas) > 0:
+            areas_text = f"IMPORTANT: Only analyze the {len(analysis_areas)} selected region(s) in the image. Each region has been marked for specific material analysis. "
+        
         # Generate prompt using template
         prompt = MATERIAL_ANALYSIS_PROMPT.format(
             room_context=room_context,
             focus_text=focus_text
         )
+        
+        # Add areas instruction at the beginning if areas are selected
+        if areas_text:
+            prompt = areas_text + "\n\n" + prompt
         
         try:
             if ai_service.mock_mode:

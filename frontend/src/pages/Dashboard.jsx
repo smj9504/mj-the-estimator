@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import api from '../utils/api';
 import { buildApiUrl, API_CONFIG } from '../config/api';
 import logger from '../utils/logger';
+import { autoSaveAPI } from '../utils/autoSave';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -46,44 +47,168 @@ const Dashboard = () => {
     }
   };
 
-  const loadEstimates = () => {
-    // Load completion status from sessionStorage
-    const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+  const loadEstimates = async () => {
+    let preEstimateSteps = [];
     
-    // Also check if data exists for each step
-    const measurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
-    const workScopeData = sessionStorage.getItem(`workScopeData_${sessionId}`);
-    
-    const preEstimateSteps = [
-      { 
-        name: 'Measurement Data', 
-        completed: completionStatus.measurementData || !!measurementData, 
-        path: '/pre-estimate/measurement-data' 
-      },
-      { 
-        name: 'Opening Verification', 
-        completed: completionStatus.openingVerification || false, 
-        path: '/pre-estimate/opening-verification' 
-      },
-      { 
-        name: 'Material Scope', 
-        completed: completionStatus.materialScope || !!sessionStorage.getItem(`materialScope_${sessionId}`), 
-        path: '/pre-estimate/material-scope' 
-      },
-      { 
-        name: 'Demo Scope', 
-        completed: completionStatus.demoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
-        path: '/pre-estimate/demo-scope' 
-      },
-      { 
-        name: 'Work Scope', 
-        completed: completionStatus.workScope || !!workScopeData, 
-        path: '/pre-estimate/work-scope' 
+    try {
+      // Load saved progress from database
+      const savedProgress = await autoSaveAPI.getProgress(sessionId);
+      
+      // Load completion status from sessionStorage as fallback
+      const completionStatus = savedProgress.stepStatuses || JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+      
+      // Also check if data exists for each step
+      let measurementDataExists = false;
+      const measurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
+      
+      if (measurementData) {
+        measurementDataExists = true;
+      } else {
+        // Check if measurement data exists in database
+        try {
+          const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+          if (response.ok) {
+            const apiData = await response.json();
+            measurementDataExists = apiData.success && apiData.data && Array.isArray(apiData.data) && apiData.data.length > 0;
+          }
+        } catch (error) {
+          console.log('Dashboard: Could not check measurement data from API');
+        }
       }
-    ];
+      
+      const workScopeData = sessionStorage.getItem(`workScopeData_${sessionId}`);
+      
+      // Check if material scope exists in database and has meaningful data
+      let hasMaterialScope = false;
+      try {
+        const savedMaterialScope = await autoSaveAPI.getMaterialScope(sessionId);
+        hasMaterialScope = savedMaterialScope.scopeData && 
+                          savedMaterialScope.scopeData.locations && 
+                          savedMaterialScope.scopeData.locations.length > 0 &&
+                          savedMaterialScope.scopeData.locations.some(loc => 
+                            loc.rooms && loc.rooms.length > 0 && 
+                            loc.rooms.some(room => 
+                              room.use_default_material !== undefined || 
+                              (room.material_override && Object.keys(room.material_override).length > 0)
+                            )
+                          );
+      } catch (materialScopeError) {
+        console.log('Dashboard: Could not check material scope from API');
+      }
+      
+      preEstimateSteps = [
+        { 
+          name: 'Measurement Data', 
+          completed: completionStatus.measurementData || measurementDataExists, 
+          path: '/pre-estimate/measurement-data' 
+        },
+        { 
+          name: 'Opening Verification', 
+          completed: completionStatus.openingVerification === true, 
+          path: '/pre-estimate/opening-verification' 
+        },
+        { 
+          name: 'Material Scope', 
+          completed: completionStatus.materialScope === true || hasMaterialScope, 
+          path: '/pre-estimate/material-scope' 
+        },
+        { 
+          name: 'Demo Scope', 
+          completed: completionStatus.demoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
+          path: '/pre-estimate/demo-scope' 
+        },
+        { 
+          name: 'Work Scope', 
+          completed: completionStatus.workScope || !!workScopeData, 
+          path: '/pre-estimate/work-scope' 
+        }
+      ];
+    } catch (error) {
+      console.error('Error loading saved progress:', error);
+      
+      // Fallback to sessionStorage-only logic
+      const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+      const measurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
+      const workScopeData = sessionStorage.getItem(`workScopeData_${sessionId}`);
+      
+      // Check measurement data existence in fallback
+      let measurementDataExists = false;
+      if (measurementData) {
+        measurementDataExists = true;
+      } else {
+        // Check if measurement data exists in database
+        try {
+          const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+          if (response.ok) {
+            const apiData = await response.json();
+            measurementDataExists = apiData.success && apiData.data && Array.isArray(apiData.data) && apiData.data.length > 0;
+          }
+        } catch (fallbackError) {
+          console.log('Dashboard fallback: Could not check measurement data from API');
+        }
+      }
+      
+      // Check material scope existence in fallback
+      let hasMaterialScope = false;
+      try {
+        const savedMaterialScope = await autoSaveAPI.getMaterialScope(sessionId);
+        hasMaterialScope = savedMaterialScope.scopeData && 
+                          savedMaterialScope.scopeData.locations && 
+                          savedMaterialScope.scopeData.locations.length > 0 &&
+                          savedMaterialScope.scopeData.locations.some(loc => 
+                            loc.rooms && loc.rooms.length > 0 && 
+                            loc.rooms.some(room => 
+                              room.use_default_material !== undefined || 
+                              (room.material_override && Object.keys(room.material_override).length > 0)
+                            )
+                          );
+      } catch (materialScopeError) {
+        console.log('Dashboard fallback: Could not check material scope from API');
+      }
+      
+      preEstimateSteps = [
+        { 
+          name: 'Measurement Data', 
+          completed: completionStatus.measurementData || measurementDataExists, 
+          path: '/pre-estimate/measurement-data' 
+        },
+        { 
+          name: 'Opening Verification', 
+          completed: completionStatus.openingVerification === true, 
+          path: '/pre-estimate/opening-verification' 
+        },
+        { 
+          name: 'Material Scope', 
+          completed: completionStatus.materialScope === true || hasMaterialScope, 
+          path: '/pre-estimate/material-scope' 
+        },
+        { 
+          name: 'Demo Scope', 
+          completed: completionStatus.demoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
+          path: '/pre-estimate/demo-scope' 
+        },
+        { 
+          name: 'Work Scope', 
+          completed: completionStatus.workScope || !!workScopeData, 
+          path: '/pre-estimate/work-scope' 
+        }
+      ];
+    }
 
     const completedSteps = preEstimateSteps.filter(step => step.completed).length;
     const status = completedSteps === preEstimateSteps.length ? 'completed' : 'in_progress';
+    
+    // Debug logging for progress tracking
+    console.log('Dashboard: Progress Status Summary:', {
+      sessionId,
+      completedSteps,
+      totalSteps: preEstimateSteps.length,
+      status,
+      stepDetails: preEstimateSteps.map(step => ({
+        name: step.name,
+        completed: step.completed
+      }))
+    });
 
     // Check if Material Scope and Demo Scope are completed for demolition JSON
     const materialScopeCompleted = preEstimateSteps.find(step => step.name === 'Material Scope')?.completed || false;

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import OpeningEditor from '../../components/OpeningEditor';
 import { updateRoomOpenings } from '../../utils/api';
+import { autoSaveAPI } from '../../utils/autoSave';
 import logger from '../../utils/logger';
 
 const OpeningVerification = () => {
@@ -24,16 +25,41 @@ const OpeningVerification = () => {
   const loadMeasurementData = async () => {
     try {
       // Get the measurement data from session storage or API
+      let data = null;
       const storedData = sessionStorage.getItem(`measurementData_${sessionId}`);
+      
       if (storedData) {
-        const data = JSON.parse(storedData);
-        setMeasurementData(data);
-        setLoading(false);
+        // Load from sessionStorage
+        data = JSON.parse(storedData);
+        logger.info('Opening Verification: Loaded measurement data from sessionStorage');
       } else {
         // Fallback: fetch from API if not in session storage
-        // This would need to be implemented based on your API structure
-        setLoading(false);
+        logger.info('Opening Verification: No data in sessionStorage, loading from API...');
+        try {
+          const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+          if (!response.ok) {
+            throw new Error(`API Error: ${response.status} ${response.statusText}`);
+          }
+          const apiData = await response.json();
+          if (apiData.success && apiData.data) {
+            data = apiData.data;
+            // Store in sessionStorage for subsequent use
+            sessionStorage.setItem(`measurementData_${sessionId}`, JSON.stringify(data));
+            logger.info('Opening Verification: Loaded measurement data from API');
+          } else {
+            throw new Error('Invalid API response format');
+          }
+        } catch (apiError) {
+          logger.error('Opening Verification: Failed to load from API:', apiError);
+          setLoading(false);
+          return;
+        }
       }
+      
+      if (data) {
+        setMeasurementData(data);
+      }
+      setLoading(false);
     } catch (error) {
       logger.error('Error loading measurement data:', error);
       setLoading(false);
@@ -163,14 +189,26 @@ const OpeningVerification = () => {
     return room || selectedRoom.room;
   };
 
-  const handleContinue = () => {
-    // Mark this step as completed
-    const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
-    completionStatus.openingVerification = true;
-    sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
-    
-    // Navigate to the next step in the workflow
-    navigate(`/pre-estimate/material-scope?session=${sessionId}`);
+  const handleContinue = async () => {
+    try {
+      // Mark this step as completed
+      const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+      completionStatus.openingVerification = true;
+      sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
+      
+      // Also save to database
+      await autoSaveAPI.saveProgress(sessionId, {
+        currentStep: 'opening-verification',
+        stepStatuses: completionStatus
+      });
+      
+      // Navigate to the next step in the workflow
+      navigate(`/pre-estimate/material-scope?session=${sessionId}`);
+    } catch (error) {
+      console.error('Error saving completion status:', error);
+      // Still navigate even if saving fails
+      navigate(`/pre-estimate/material-scope?session=${sessionId}`);
+    }
   };
 
 

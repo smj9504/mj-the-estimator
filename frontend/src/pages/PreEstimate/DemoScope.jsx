@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import DemoAnalysisModule from '../../components/DemoAnalysis/DemoAnalysisModule';
+import { autoSaveManager, autoSaveAPI } from '../../utils/autoSave';
+import AutoSaveIndicator from '../../components/AutoSaveIndicator';
 
 const DemoScope = () => {
   const [searchParams] = useSearchParams();
@@ -10,19 +13,80 @@ const DemoScope = () => {
   const [materialScopeData, setMaterialScopeData] = useState(null);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [aiCalcLoading, setAiCalcLoading] = useState({}); // Track loading state for each surface
 
   // Demo'd scope state
   const [demoedScope, setDemoedScope] = useState({});
+  
+  // AI Analysis state
+  const [showAIAnalysis, setShowAIAnalysis] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState(null);
+  const [appliedAnalyses, setAppliedAnalyses] = useState(new Set());
+
+  // Auto-save state
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
+
+  // Setup auto-save
+  useEffect(() => {
+    if (sessionId) {
+      const autoSave = autoSaveManager.register(
+        `demoScope_${sessionId}`,
+        async (data) => {
+          await autoSaveAPI.saveDemoScope(sessionId, data);
+        },
+        {
+          debounceTime: 3000,
+          onStatusChange: setAutoSaveStatus
+        }
+      );
+
+      return () => {
+        autoSaveManager.unregister(`demoScope_${sessionId}`);
+      };
+    }
+  }, [sessionId]);
+
+  // Auto-save when demoedScope changes
+  useEffect(() => {
+    if (sessionId && Object.keys(demoedScope).length > 0) {
+      autoSaveManager.save(`demoScope_${sessionId}`, demoedScope);
+    }
+  }, [demoedScope, sessionId]);
 
   // Load measurement and material scope data
   useEffect(() => {
     if (sessionId) {
-      // Load measurement data
-      const storedMeasurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
-      // Load material scope data
-      const storedMaterialData = sessionStorage.getItem(`materialScope_${sessionId}`);
-      
-      if (storedMeasurementData) {
+      loadData();
+    }
+    setLoading(false);
+  }, [sessionId]);
+
+  const loadData = async () => {
+    // Load measurement data from sessionStorage first, then database
+    let storedMeasurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
+    
+    // If not in sessionStorage, try to load from database
+    if (!storedMeasurementData) {
+      try {
+        const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+        if (response.ok) {
+          const apiData = await response.json();
+          if (apiData.success && apiData.data && Array.isArray(apiData.data) && apiData.data.length > 0) {
+            storedMeasurementData = JSON.stringify(apiData.data);
+            // Save to sessionStorage for future use
+            sessionStorage.setItem(`measurementData_${sessionId}`, storedMeasurementData);
+            console.log('Loaded measurement data from database');
+          }
+        }
+      } catch (error) {
+        console.log('Could not load measurement data from API:', error);
+      }
+    }
+    
+    // Load material scope data
+    const storedMaterialData = sessionStorage.getItem(`materialScope_${sessionId}`);
+    
+    if (storedMeasurementData) {
         try {
           const parsedMeasurementData = JSON.parse(storedMeasurementData);
           setMeasurementData(parsedMeasurementData);
@@ -33,34 +97,62 @@ const DemoScope = () => {
             setMaterialScopeData(materialData);
           }
           
-          // Load existing demo scope data or initialize
-          const existingDemoScope = sessionStorage.getItem(`demoScope_${sessionId}`);
-          if (existingDemoScope) {
-            const parsedDemoScope = JSON.parse(existingDemoScope);
-            
-            // Fix any duplicate IDs in existing surfaces
-            const fixedDemoScope = {};
-            Object.keys(parsedDemoScope).forEach(locationKey => {
-              fixedDemoScope[locationKey] = parsedDemoScope[locationKey].map(room => ({
-                ...room,
-                surfaces: (room.surfaces || []).map(surface => ({
-                  ...surface,
-                  id: surface.id || generateSurfaceId() // Ensure all surfaces have unique IDs
-                }))
-              }));
-            });
-            
-            setDemoedScope(fixedDemoScope);
-          } else {
-            // Initialize demo'd scope structure
-            const initialDemoedScope = {};
-            parsedMeasurementData.forEach(location => {
-              initialDemoedScope[location.location] = location.rooms?.map(room => ({
-                location: room.name,
-                surfaces: []
-              })) || [];
-            });
-            setDemoedScope(initialDemoedScope);
+          // Load existing demo scope data from database first, then fallback to sessionStorage
+          let demoScopeLoaded = false;
+          try {
+            const savedDemoScope = await autoSaveAPI.getDemoScope(sessionId);
+            if (savedDemoScope.success && savedDemoScope.demoScopeData && Object.keys(savedDemoScope.demoScopeData).length > 0) {
+              // Fix any duplicate IDs in existing surfaces
+              const fixedDemoScope = {};
+              Object.keys(savedDemoScope.demoScopeData).forEach(locationKey => {
+                fixedDemoScope[locationKey] = savedDemoScope.demoScopeData[locationKey].map(room => ({
+                  ...room,
+                  surfaces: (room.surfaces || []).map(surface => ({
+                    ...surface,
+                    id: surface.id || generateSurfaceId() // Ensure all surfaces have unique IDs
+                  }))
+                }));
+              });
+              setDemoedScope(fixedDemoScope);
+              demoScopeLoaded = true;
+              console.log('Loaded demo scope from database');
+            }
+          } catch (error) {
+            console.log('Could not load demo scope from database, trying sessionStorage');
+          }
+
+          if (!demoScopeLoaded) {
+            // Fallback to sessionStorage
+            const existingDemoScope = sessionStorage.getItem(`demoScope_${sessionId}`);
+            if (existingDemoScope) {
+              const parsedDemoScope = JSON.parse(existingDemoScope);
+              
+              // Fix any duplicate IDs in existing surfaces
+              const fixedDemoScope = {};
+              Object.keys(parsedDemoScope).forEach(locationKey => {
+                fixedDemoScope[locationKey] = parsedDemoScope[locationKey].map(room => ({
+                  ...room,
+                  surfaces: (room.surfaces || []).map(surface => ({
+                    ...surface,
+                    id: surface.id || generateSurfaceId() // Ensure all surfaces have unique IDs
+                  }))
+                }));
+              });
+              
+              setDemoedScope(fixedDemoScope);
+              console.log('Loaded demo scope from sessionStorage');
+            } else {
+              // Initialize demo'd scope structure
+              const initialDemoedScope = {};
+              parsedMeasurementData.forEach(location => {
+                initialDemoedScope[location.location] = location.rooms?.map(room => ({
+                  location: room.name,
+                  surfaces: []
+                })) || [];
+              });
+              setDemoedScope(initialDemoedScope);
+              console.log('Initialized new demo scope structure');
+            }
           }
           
           // Auto-select first room
@@ -76,9 +168,7 @@ const DemoScope = () => {
           console.error('Error parsing stored data:', error);
         }
       }
-    }
-    setLoading(false);
-  }, [sessionId]);
+  };
 
   // Available surface types
   const surfaceTypes = [
@@ -86,8 +176,33 @@ const DemoScope = () => {
     'trim', 'door', 'window', 'countertop', 'backsplash'
   ];
 
-  // Surface types that require insulation field
-  const surfaceTypesWithInsulation = ['ceiling', 'wall', 'floor'];
+  // Get appropriate unit for surface type
+  const getSurfaceUnit = (surfaceType) => {
+    const unitMapping = {
+      'floor': 'sq ft',
+      'ceiling': 'sq ft', 
+      'wall': 'sq ft',
+      'countertop': 'sq ft',
+      'backsplash': 'sq ft',
+      'trim': 'linear ft',
+      'baseboard': 'linear ft',
+      'quarter_round': 'linear ft',
+      'door': 'each',
+      'window': 'each',
+      'cabinet': 'each',
+      'vanity': 'each',
+      'toilet': 'each'
+    };
+    
+    return unitMapping[surfaceType?.toLowerCase()] || 'sq ft';
+  };
+
+  // Helper function to ensure array format for materials
+  const ensureArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (value === undefined || value === null || value === '') return [];
+    return [value];
+  };
 
   // Get available materials from material scope data
   const getAvailableMaterials = () => {
@@ -95,15 +210,25 @@ const DemoScope = () => {
     
     // Add default materials from material scope
     if (materialScopeData?.default_scope?.material) {
-      Object.values(materialScopeData.default_scope.material).forEach(material => {
-        if (material.trim()) materials.add(material.trim());
+      Object.values(materialScopeData.default_scope.material).forEach(materialValue => {
+        const materialArray = ensureArray(materialValue);
+        materialArray.forEach(material => {
+          if (material && typeof material === 'string' && material.trim()) {
+            materials.add(material.trim());
+          }
+        });
       });
     }
     
     // Add default underlayments from material scope
     if (materialScopeData?.default_scope?.material_underlayment) {
-      Object.values(materialScopeData.default_scope.material_underlayment).forEach(material => {
-        if (material.trim()) materials.add(material.trim());
+      Object.values(materialScopeData.default_scope.material_underlayment).forEach(materialValue => {
+        const materialArray = ensureArray(materialValue);
+        materialArray.forEach(material => {
+          if (material && typeof material === 'string' && material.trim()) {
+            materials.add(material.trim());
+          }
+        });
       });
     }
     
@@ -113,14 +238,24 @@ const DemoScope = () => {
       const roomData = locationData?.rooms[selectedRoom.roomIndex];
       
       if (roomData?.material_override) {
-        Object.values(roomData.material_override).forEach(material => {
-          if (material.trim()) materials.add(material.trim());
+        Object.values(roomData.material_override).forEach(materialValue => {
+          const materialArray = ensureArray(materialValue);
+          materialArray.forEach(material => {
+            if (material && typeof material === 'string' && material.trim()) {
+              materials.add(material.trim());
+            }
+          });
         });
       }
       
       if (roomData?.material_underlayment_override) {
-        Object.values(roomData.material_underlayment_override).forEach(material => {
-          if (material.trim()) materials.add(material.trim());
+        Object.values(roomData.material_underlayment_override).forEach(materialValue => {
+          const materialArray = ensureArray(materialValue);
+          materialArray.forEach(material => {
+            if (material && typeof material === 'string' && material.trim()) {
+              materials.add(material.trim());
+            }
+          });
         });
       }
     }
@@ -148,15 +283,17 @@ const DemoScope = () => {
     // First, check if this room has material override
     if (roomData && roomData.use_default_material === 'N') {
       const overrideMaterial = roomData.material_override?.[materialKey];
-      if (overrideMaterial && overrideMaterial !== 'N/A') {
-        return overrideMaterial;
+      const overrideMaterialArray = ensureArray(overrideMaterial);
+      if (overrideMaterialArray.length > 0 && !overrideMaterialArray.includes('N/A')) {
+        return overrideMaterialArray[0]; // Return first material for backward compatibility
       }
     }
     
     // Otherwise, use default material
     const defaultMaterial = materialScopeData.default_scope?.material?.[materialKey];
-    if (defaultMaterial && defaultMaterial !== 'N/A') {
-      return defaultMaterial;
+    const defaultMaterialArray = ensureArray(defaultMaterial);
+    if (defaultMaterialArray.length > 0 && !defaultMaterialArray.includes('N/A')) {
+      return defaultMaterialArray[0]; // Return first material for backward compatibility
     }
     
     return '';
@@ -175,40 +312,81 @@ const DemoScope = () => {
     return `surface_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   };
 
-  // Add surface to demo'd scope
+  // Track pending surface additions to prevent React Strict Mode duplicates
+  const pendingAdditionsRef = useRef(new Set());
+  
   const addDemoedSurface = (locationName, roomIndex) => {
+    const executionId = `${locationName}_${roomIndex}_${Date.now()}_${Math.random()}`;
+    console.log('🔵 addDemoedSurface called - executionId:', executionId);
+    
+    // Create a unique key for this add operation
+    const addKey = `${locationName}_${roomIndex}`;
+    
+    // Check if an addition is already pending for this location/room
+    if (pendingAdditionsRef.current.has(addKey)) {
+      console.log('🟡 Addition already pending for:', addKey, '- ignoring duplicate');
+      return;
+    }
+    
+    // Mark this addition as pending
+    pendingAdditionsRef.current.add(addKey);
+    console.log('🟢 Added to pending set:', addKey);
+    
+    // Get current room's material data outside of setState
+    const roomMaterialData = getCurrentRoomMaterialData();
+    const autoMaterial = getMaterialForSurfaceType('floor', roomMaterialData);
+    const surfaceId = generateSurfaceId();
+    
+    const newSurface = {
+      id: surfaceId,
+      type: 'floor',
+      name: '',
+      material: autoMaterial,
+      area_sqft: 0.00,
+      calc_method: 'full',
+      full_area: 0.00,
+      percentage: 100,
+      percentage_area: 0.00,
+      partial_description: '',
+      partial_area: 0.00
+    };
+    
+    console.log('✅ Creating new surface with ID:', surfaceId);
+    
     setDemoedScope(prev => {
+      console.log('🔍 Current surfaces count before add:', prev[locationName]?.[roomIndex]?.surfaces?.length || 0);
+      
       const newScope = { ...prev };
       if (!newScope[locationName]) newScope[locationName] = [];
-      if (!newScope[locationName][roomIndex]) return prev;
+      if (!newScope[locationName][roomIndex]) {
+        console.log('🔴 Room not found, removing from pending and cancelling');
+        pendingAdditionsRef.current.delete(addKey);
+        return prev;
+      }
       
       if (!newScope[locationName][roomIndex].surfaces) {
         newScope[locationName][roomIndex].surfaces = [];
       }
       
-      // Get current room's material data
-      const roomMaterialData = getCurrentRoomMaterialData();
-      
-      // Get auto-filled material for default surface type (floor)
-      const autoMaterial = getMaterialForSurfaceType('floor', roomMaterialData);
-      
-      const newSurface = {
-        id: generateSurfaceId(), // Use unique ID generator
-        type: 'floor',
-        name: '',
-        material: autoMaterial, // Auto-fill material from Material Scope
-        area_sqft: 0.00
-      };
-      
-      // Add insulation field only for specific surface types
-      if (surfaceTypesWithInsulation.includes('floor')) {
-        newSurface.insulation_sqft = 0.00;
+      // Double-check: ensure no duplicate IDs exist
+      const existingSurface = newScope[locationName][roomIndex].surfaces.find(s => s.id === surfaceId);
+      if (existingSurface) {
+        console.log('🚫 Surface with same ID already exists, removing from pending and skipping');
+        pendingAdditionsRef.current.delete(addKey);
+        return prev;
       }
       
       newScope[locationName][roomIndex].surfaces.push(newSurface);
+      console.log('📊 New surfaces count after add:', newScope[locationName][roomIndex].surfaces.length);
       
       return newScope;
     });
+    
+    // Remove from pending set after state update
+    setTimeout(() => {
+      console.log('🔄 Removing from pending set:', addKey);
+      pendingAdditionsRef.current.delete(addKey);
+    }, 50);
   };
 
   // Update demo'd surface
@@ -222,23 +400,49 @@ const DemoScope = () => {
       
       const surface = newScope[locationName][roomIndex].surfaces[surfaceIndex];
       
-      // If changing surface type, handle insulation field and auto-fill material
+      // If changing surface type, auto-fill material
       if (field === 'type') {
-        const needsInsulation = surfaceTypesWithInsulation.includes(value);
-        const hasInsulation = 'insulation_sqft' in surface;
-        
-        if (needsInsulation && !hasInsulation) {
-          surface.insulation_sqft = 0.00;
-        } else if (!needsInsulation && hasInsulation) {
-          delete surface.insulation_sqft;
-        }
-        
         // Auto-fill material from Material Scope when surface type changes
         const roomMaterialData = getCurrentRoomMaterialData();
         const autoMaterial = getMaterialForSurfaceType(value, roomMaterialData);
         if (autoMaterial) {
           surface.material = autoMaterial;
         }
+      }
+      
+      // Handle calculation method changes
+      if (field === 'calc_method') {
+        const oldMethod = surface.calc_method || 'full';
+        
+        // Save current area_sqft to the old method's storage
+        if (oldMethod === 'full') {
+          surface.full_area = surface.area_sqft;
+        } else if (oldMethod === 'percentage') {
+          surface.percentage_area = surface.area_sqft;
+        } else if (oldMethod === 'partial') {
+          surface.partial_area = surface.area_sqft;
+        }
+        
+        // Restore area_sqft from the new method's storage
+        if (value === 'full') {
+          surface.area_sqft = surface.full_area || 0;
+        } else if (value === 'percentage') {
+          surface.area_sqft = surface.percentage_area || 0;
+        } else if (value === 'partial') {
+          // For partial, start with 0 (empty) unless there's already a calculated value
+          surface.area_sqft = surface.partial_area || 0;
+          // If switching to partial for the first time, clear the description
+          if (!surface.partial_description) {
+            surface.partial_description = '';
+          }
+        }
+      }
+      
+      // Handle percentage updates
+      if (field === 'percentage') {
+        // Don't overwrite the stored percentage value
+        surface.percentage = value;
+        // The area_sqft will be calculated in the UI
       }
       
       surface[field] = value;
@@ -257,6 +461,88 @@ const DemoScope = () => {
     });
   };
 
+  const calculatePartialArea = async (description, surfaceType, roomMeasurements, surfaceId) => {
+    try {
+      console.log('Calculating area for:', { description, surfaceType, roomMeasurements });
+      
+      // Set loading state for this surface
+      if (surfaceId) {
+        setAiCalcLoading(prev => ({ ...prev, [surfaceId]: true }));
+      }
+      
+      // Ensure roomMeasurements is properly formatted for the API
+      const dimensions = roomMeasurements ? {
+        floor_area_sqft: parseFloat(roomMeasurements.floor_area_sqft) || 0.0,
+        wall_area_sqft: parseFloat(roomMeasurements.wall_area_sqft) || 0.0,
+        ceiling_area_sqft: parseFloat(roomMeasurements.ceiling_area_sqft) || 0.0,
+        height: parseFloat(roomMeasurements.height) || 8.0
+      } : null;
+      
+      const requestBody = {
+        description: description.trim(),
+        surface_type: surfaceType,
+        existing_dimensions: dimensions
+      };
+      
+      // Validate required fields
+      if (!requestBody.description) {
+        throw new Error('Description is required');
+      }
+      if (!requestBody.surface_type) {
+        throw new Error('Surface type is required');
+      }
+      
+      console.log('Sending request body:', requestBody);
+      
+      const response = await fetch('http://localhost:8001/api/pre-estimate/calculate-area', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
+        throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('AI calculation result:', result);
+      
+      if (result.success) {
+        console.log('✅ AI calculation successful');
+        console.log('📊 Calculated area:', result.calculated_area);
+        if (result.calculated_area > 0) {
+          return result.calculated_area;
+        } else {
+          console.warn('⚠️ AI returned 0 area - description might be unclear or AI couldn\'t parse it');
+          console.log('🔍 Original description:', result.description);
+          console.log('🏷️ Surface type:', result.surface_type);
+          return 0;
+        }
+      } else {
+        console.error('❌ AI calculation failed');
+        console.error('📋 Full response:', result);
+        return 0;
+      }
+    } catch (error) {
+      console.error('Error calculating area:', error);
+      alert('Failed to calculate area using AI. Please enter the value manually.');
+      return 0;
+    } finally {
+      // Clear loading state for this surface
+      if (surfaceId) {
+        setAiCalcLoading(prev => {
+          const newState = { ...prev };
+          delete newState[surfaceId];
+          return newState;
+        });
+      }
+    }
+  };
+
   const handleRoomSelect = (location, locationIndex, room, roomIndex) => {
     setSelectedRoom({
       location,
@@ -266,12 +552,140 @@ const DemoScope = () => {
     });
   };
 
-  const saveData = () => {
-    sessionStorage.setItem(`demoScope_${sessionId}`, JSON.stringify(demoedScope));
+  // AI Analysis handlers
+  const handleAnalysisComplete = (results) => {
+    setAnalysisResults(results);
   };
 
-  const handleNext = () => {
-    saveData();
+  const applyAnalysisToForm = useCallback((analysisData) => {
+    console.log('🔧 applyAnalysisToForm called with:', analysisData.analysis_id);
+    console.log('📊 Full analysis data:', analysisData);
+    console.log('🔍 Areas data:', analysisData.final_data?.areas);
+    
+    if (!selectedRoom || !analysisData.final_data?.areas) {
+      console.log('❌ Missing data - selectedRoom or areas');
+      return;
+    }
+
+    // Check if this analysis was already applied
+    if (appliedAnalyses.has(analysisData.analysis_id)) {
+      console.log('⚠️ Analysis already applied:', analysisData.analysis_id);
+      alert('이 분석 결과는 이미 적용되었습니다.');
+      return;
+    }
+
+    const locationName = selectedRoom.location;
+    const roomIndex = selectedRoom.roomIndex;
+    
+    console.log('📍 Applying to:', locationName, 'room index:', roomIndex);
+    console.log('🔢 Areas to add:', analysisData.final_data.areas.length);
+    
+    // Mark this analysis as applied FIRST to prevent double execution
+    setAppliedAnalyses(prev => {
+      const newSet = new Set([...prev, analysisData.analysis_id]);
+      console.log('🔒 Marked as applied:', analysisData.analysis_id);
+      return newSet;
+    });
+    
+    // Apply each detected area as a new surface in a single update
+    setDemoedScope(prev => {
+      const newScope = { ...prev };
+      if (!newScope[locationName]) newScope[locationName] = [];
+      if (!newScope[locationName][roomIndex]) {
+        newScope[locationName][roomIndex] = { location: selectedRoom.room.name, surfaces: [] };
+      }
+      if (!newScope[locationName][roomIndex].surfaces) {
+        newScope[locationName][roomIndex].surfaces = [];
+      }
+      
+      // Check if surfaces with this analysis_id already exist
+      const existingSurfaces = newScope[locationName][roomIndex].surfaces.filter(
+        s => s.ai_analysis_ref === analysisData.analysis_id
+      );
+      
+      if (existingSurfaces.length > 0) {
+        console.log('⚠️ Surfaces with this analysis_id already exist, skipping');
+        return prev; // Return previous state without changes
+      }
+      
+      // Add all surfaces in one batch to prevent multiple re-renders
+      const newSurfaces = analysisData.final_data.areas.map(area => {
+        const surfaceId = generateSurfaceId();
+        // Try multiple possible field names for area value
+        const areaValue = parseFloat(area.area_sqft) || parseFloat(area.ai_estimated_area) || parseFloat(area.area) || 0;
+        console.log('➕ Creating surface:', surfaceId, 'for area:', area.type, 'area_sqft:', areaValue);
+        console.log('🔍 Raw area data:', area);
+        return {
+          id: surfaceId,
+          type: area.type,
+          name: area.description || `AI detected ${area.type}`,
+          material: area.material || '',
+          area_sqft: areaValue, // This is the current display value
+          calc_method: 'partial',
+          full_area: 0,
+          percentage: 100,
+          percentage_area: 0,
+          partial_description: `AI analysis: ${area.description}`,
+          partial_area: areaValue, // Store the AI calculated value
+          ai_analysis_ref: analysisData.analysis_id
+        };
+      });
+      
+      const beforeCount = newScope[locationName][roomIndex].surfaces.length;
+      newScope[locationName][roomIndex].surfaces.push(...newSurfaces);
+      const afterCount = newScope[locationName][roomIndex].surfaces.length;
+      
+      console.log('📊 Surface count before:', beforeCount, 'after:', afterCount);
+      console.log('✅ Added surfaces with area values:', newSurfaces.map(s => ({
+        id: s.id,
+        type: s.type,
+        area_sqft: s.area_sqft,
+        partial_area: s.partial_area,
+        calc_method: s.calc_method
+      })));
+      return newScope;
+    });
+    
+    // Show success message
+    alert(`AI 분석 결과가 적용되었습니다!\n${analysisData.final_data.areas.length}개 영역이 추가되었습니다.`);
+    
+    // Close AI analysis panel
+    setShowAIAnalysis(false);
+  }, [selectedRoom, appliedAnalyses]);
+
+  const handleFeedbackSubmit = async (feedbackData) => {
+    try {
+      const response = await fetch('http://localhost:8001/api/demo-analysis/feedback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(feedbackData)
+      });
+
+      if (response.ok) {
+        console.log('Feedback submitted successfully');
+      }
+    } catch (error) {
+      console.error('Failed to submit feedback:', error);
+    }
+  };
+
+  const saveData = async () => {
+    // Save to sessionStorage for backward compatibility
+    sessionStorage.setItem(`demoScope_${sessionId}`, JSON.stringify(demoedScope));
+    
+    // Force save to database
+    try {
+      await autoSaveManager.forceSave(`demoScope_${sessionId}`, demoedScope);
+      console.log('Demo scope saved to database successfully');
+    } catch (error) {
+      console.error('Failed to save demo scope to database:', error);
+    }
+  };
+
+  const handleNext = async () => {
+    await saveData();
     
     // Mark demo scope as completed
     const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
@@ -343,8 +757,11 @@ const DemoScope = () => {
                 Define areas and materials that have already been demolished
               </p>
             </div>
-            <div className="text-sm text-gray-500">
-              Session: {sessionId?.slice(-8)}
+            <div className="flex items-center space-x-4">
+              <div className="text-sm text-gray-500">
+                Session: {sessionId?.slice(-8)}
+              </div>
+              <AutoSaveIndicator status={autoSaveStatus} />
             </div>
           </div>
         </div>
@@ -406,6 +823,51 @@ const DemoScope = () => {
                   <div className="text-sm text-gray-600 mb-4">
                     Configure demolition scope for surfaces that are already demolished
                   </div>
+
+                  {/* AI Analysis Section */}
+                  <div className="border-t pt-4 mt-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <h4 className="text-base font-medium text-gray-900">
+                          AI 사진 분석
+                        </h4>
+                        <p className="text-sm text-gray-600 mt-1">
+                          방 사진을 업로드하여 자동으로 Demo 영역을 분석하세요
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShowAIAnalysis(!showAIAnalysis)}
+                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                          showAIAnalysis
+                            ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                            : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 shadow-sm'
+                        }`}
+                      >
+                        {showAIAnalysis ? '분석 닫기' : 'AI 분석 시작'}
+                      </button>
+                    </div>
+                    
+                    {showAIAnalysis && (
+                      <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                        <DemoAnalysisModule
+                          roomId={selectedRoom.room.id || selectedRoom.room.name}
+                          roomData={selectedRoom.room}
+                          projectId={sessionId} // Using sessionId as projectId for now
+                          sessionId={sessionId}
+                          onAnalysisComplete={handleAnalysisComplete}
+                          onApplyToForm={applyAnalysisToForm}
+                          onFeedbackSubmit={handleFeedbackSubmit}
+                          mode="production"
+                          config={{
+                            enableFeedback: true,
+                            showConfidence: true,
+                            showApplyButton: true,
+                            debugMode: false
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
                   
                   {/* Demo'd Scope Form */}
                   {(() => {
@@ -422,8 +884,12 @@ const DemoScope = () => {
                         <div className="flex justify-between items-center">
                           <h4 className="text-base font-medium text-gray-900">Demolished Surfaces</h4>
                           <button
-                            onClick={() => addDemoedSurface(locationName, roomIndex)}
-                            className="px-4 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              addDemoedSurface(locationName, roomIndex);
+                            }}
+                            className="px-4 py-2 bg-green-600 text-gray-900 text-sm rounded-md hover:bg-green-700 font-medium transition-colors"
                           >
                             Add Surface
                           </button>
@@ -450,23 +916,26 @@ const DemoScope = () => {
                                   </button>
                                 </div>
                                 
-                                <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${surfaceTypesWithInsulation.includes(surface.type) ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+                                <div className="space-y-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                   {/* Surface Type */}
                                   <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
                                       Type
                                     </label>
-                                    <select
+                                    <input
+                                      type="text"
+                                      list={`surface-types-${surface.id}`}
                                       value={surface.type || 'floor'}
                                       onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'type', e.target.value)}
-                                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                                    >
+                                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm capitalize"
+                                      placeholder="Select or type surface type"
+                                    />
+                                    <datalist id={`surface-types-${surface.id}`}>
                                       {surfaceTypes.map(type => (
-                                        <option key={type} value={type} className="capitalize">
-                                          {type}
-                                        </option>
+                                        <option key={type} value={type} />
                                       ))}
-                                    </select>
+                                    </datalist>
                                   </div>
                                   
                                   {/* Surface Name */}
@@ -485,21 +954,23 @@ const DemoScope = () => {
                                   
                                   {/* Material */}
                                   <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                      Material
+                                    <div className="flex items-center justify-between mb-2">
+                                      <label className="text-sm font-medium text-gray-700">
+                                        Material
+                                      </label>
                                       {(() => {
-                                        // Check if this material comes from Material Scope
+                                        // Show "From Material Scope" tag when auto-filled
                                         const roomMaterialData = getCurrentRoomMaterialData();
                                         const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
                                         const isAutoFilled = autoMaterial && surface.material === autoMaterial;
                                         
                                         return isAutoFilled ? (
-                                          <span className="ml-2 text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
+                                          <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
                                             From Material Scope
                                           </span>
                                         ) : null;
                                       })()}
-                                    </label>
+                                    </div>
                                     <div className="relative">
                                       <input
                                         type="text"
@@ -543,17 +1014,13 @@ const DemoScope = () => {
                                       })()}
                                     </div>
                                     {(() => {
-                                      // Show helper text for auto-filled materials
+                                      // Show available material from Material Scope if not auto-filled
                                       const roomMaterialData = getCurrentRoomMaterialData();
                                       const autoMaterial = getMaterialForSurfaceType(surface.type, roomMaterialData);
                                       const isAutoFilled = autoMaterial && surface.material === autoMaterial;
                                       
-                                      return isAutoFilled ? (
-                                        <p className="text-xs text-blue-600 mt-1">
-                                          This material was automatically filled from your Material Scope configuration.
-                                        </p>
-                                      ) : autoMaterial && surface.material !== autoMaterial ? (
-                                        <p className="text-xs text-gray-500 mt-1">
+                                      return autoMaterial && !isAutoFilled ? (
+                                        <div className="mt-1 text-xs text-gray-500">
                                           Available from Material Scope: <span className="font-medium text-blue-600">{autoMaterial}</span>
                                           <button
                                             type="button"
@@ -562,42 +1029,233 @@ const DemoScope = () => {
                                           >
                                             Apply
                                           </button>
-                                        </p>
+                                        </div>
                                       ) : null;
                                     })()}
                                   </div>
                                   
-                                  {/* Area */}
-                                  <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                      Area (sq ft)
-                                    </label>
-                                    <input
-                                      type="number"
-                                      step="0.01"
-                                      value={surface.area_sqft || 0}
-                                      onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', parseFloat(e.target.value) || 0)}
-                                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                                      placeholder="0.00"
-                                    />
                                   </div>
                                   
-                                  {/* Insulation - Only show for specific surface types */}
-                                  {surfaceTypesWithInsulation.includes(surface.type) && (
+                                  {/* Removal Scope Section */}
+                                  <div>
+                                    {/* Removal Scope */}
                                     <div>
                                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Insulation (sq ft)
+                                        Removal Scope
                                       </label>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        value={surface.insulation_sqft || 0}
-                                        onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'insulation_sqft', parseFloat(e.target.value) || 0)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                                        placeholder="0.00"
-                                      />
+                                      
+                                      {/* Calculation Method Selection */}
+                                      <div className="space-y-3">
+                                        <div className="flex flex-wrap gap-2 mb-3">
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="radio"
+                                              name={`calc-method-${surface.id}`}
+                                              value="full"
+                                              checked={(surface.calc_method || 'full') === 'full'}
+                                              onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'calc_method', e.target.value)}
+                                              className="form-radio text-blue-600"
+                                            />
+                                            <span className="ml-2 text-sm">Full Area</span>
+                                          </label>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="radio"
+                                              name={`calc-method-${surface.id}`}
+                                              value="percentage"
+                                              checked={(surface.calc_method || 'full') === 'percentage'}
+                                              onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'calc_method', e.target.value)}
+                                              className="form-radio text-blue-600"
+                                            />
+                                            <span className="ml-2 text-sm">Percentage</span>
+                                          </label>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="radio"
+                                              name={`calc-method-${surface.id}`}
+                                              value="partial"
+                                              checked={(surface.calc_method || 'full') === 'partial'}
+                                              onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'calc_method', e.target.value)}
+                                              className="form-radio text-blue-600"
+                                            />
+                                            <span className="ml-2 text-sm">Partial Area</span>
+                                          </label>
+                                        </div>
+                                        
+                                        {/* Input based on selected method */}
+                                        {(() => {
+                                          const method = surface.calc_method || 'full';
+                                          
+                                          // Get base measurement based on surface type and unit
+                                          const surfaceUnit = getSurfaceUnit(surface.type);
+                                          const baseValue = (() => {
+                                            const measurements = selectedRoom.room.measurements;
+                                            
+                                            switch (surfaceUnit) {
+                                              case 'sq ft':
+                                                if (surface.type === 'floor') {
+                                                  return measurements?.floor_area_sqft || 0;
+                                                } else if (surface.type === 'ceiling') {
+                                                  return measurements?.ceiling_area_sqft || measurements?.floor_area_sqft || 0;
+                                                } else if (surface.type === 'wall') {
+                                                  return measurements?.wall_area_sqft || 0;
+                                                } else if (surface.type === 'countertop') {
+                                                  return measurements?.floor_area_sqft * 0.1 || 0; // estimate countertop area
+                                                } else if (surface.type === 'backsplash') {
+                                                  return measurements?.floor_perimeter_lf * 2 || 0; // 2ft height backsplash
+                                                }
+                                                return 0;
+                                                
+                                              case 'linear ft':
+                                                if (surface.type === 'trim' || surface.type === 'baseboard' || surface.type === 'quarter_round') {
+                                                  return measurements?.floor_perimeter_lf || 0;
+                                                }
+                                                return 0;
+                                                
+                                              case 'each':
+                                                if (surface.type === 'door') {
+                                                  return measurements?.openings?.filter(o => o.type === 'door').length || 2;
+                                                } else if (surface.type === 'window') {
+                                                  return measurements?.openings?.filter(o => o.type === 'window').length || 3;
+                                                } else if (surface.type === 'cabinet' || surface.type === 'vanity') {
+                                                  return 1; // typically 1 set per room
+                                                }
+                                                return 1;
+                                                
+                                              default:
+                                                return 0;
+                                            }
+                                          })();
+                                          
+                                          switch (method) {
+                                            case 'full':
+                                              // Auto-calculate and show
+                                              if (surface.area_sqft !== baseValue) {
+                                                updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', baseValue);
+                                              }
+                                              return (
+                                                <div className="bg-gray-50 p-3 rounded border">
+                                                  <div className="text-sm text-gray-700">
+                                                    <strong>Full {surface.type}:</strong> {baseValue.toFixed(surfaceUnit === 'each' ? 0 : 1)} {surfaceUnit}
+                                                  </div>
+                                                </div>
+                                              );
+                                              
+                                            case 'percentage':
+                                              const percentage = surface.percentage || 100;
+                                              const percentageValue = (baseValue * percentage / 100);
+                                              if (surface.area_sqft !== percentageValue) {
+                                                updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', percentageValue);
+                                              }
+                                              return (
+                                                <div className="flex items-center space-x-2">
+                                                  <input
+                                                    type="range"
+                                                    min="1"
+                                                    max="100"
+                                                    value={percentage}
+                                                    onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'percentage', parseInt(e.target.value))}
+                                                    className="flex-1"
+                                                  />
+                                                  <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="100"
+                                                    value={percentage}
+                                                    onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'percentage', parseInt(e.target.value) || 1)}
+                                                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                  />
+                                                  <span className="text-sm text-gray-600">% = {percentageValue.toFixed(surfaceUnit === 'each' ? 0 : 1)} {surfaceUnit}</span>
+                                                </div>
+                                              );
+                                              
+                                            case 'partial':
+                                              return (
+                                                <div className="space-y-2">
+                                                  <div className="flex gap-2">
+                                                    <textarea
+                                                      value={surface.partial_description || ''}
+                                                      onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'partial_description', e.target.value)}
+                                                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
+                                                      rows="2"
+                                                      placeholder="Describe the partial area (e.g., '2 feet from bottom', 'around windows and doors', 'damaged area only')"
+                                                    />
+                                                    <button
+                                                      type="button"
+                                                      onClick={async () => {
+                                                        if (surface.partial_description?.trim()) {
+                                                          // Call AI to calculate area from description
+                                                          const calculatedValue = await calculatePartialArea(
+                                                            surface.partial_description,
+                                                            surface.type,
+                                                            selectedRoom.room.measurements,
+                                                            surface.id
+                                                          );
+                                                          if (calculatedValue > 0) {
+                                                            updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', calculatedValue);
+                                                          }
+                                                        }
+                                                      }}
+                                                      disabled={!surface.partial_description?.trim() || aiCalcLoading[surface.id]}
+                                                      className="px-3 py-1 bg-purple-600 text-gray-900 text-sm rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center"
+                                                      title="Use AI to calculate area from description"
+                                                    >
+                                                      {aiCalcLoading[surface.id] ? (
+                                                        <>
+                                                          <svg className="w-4 h-4 mr-1 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                          </svg>
+                                                          Processing...
+                                                        </>
+                                                      ) : (
+                                                        <>
+                                                          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                                                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                          </svg>
+                                                          AI Calc
+                                                        </>
+                                                      )}
+                                                    </button>
+                                                  </div>
+                                                  <div className="flex items-center gap-2">
+                                                    <input
+                                                      type="number"
+                                                      step={surfaceUnit === 'each' ? '1' : '0.01'}
+                                                      value={(() => {
+                                                        const value = surface.area_sqft !== undefined && surface.area_sqft !== null ? surface.area_sqft.toString() : '';
+                                                        if (surface.ai_analysis_ref) {
+                                                          console.log(`🎯 Rendering AI surface ${surface.id} (${surface.type}): area_sqft=${surface.area_sqft}, partial_area=${surface.partial_area}, input_value="${value}"`);
+                                                        }
+                                                        return value;
+                                                      })()}
+                                                      onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', parseFloat(e.target.value) || 0)}
+                                                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
+                                                      placeholder={`Enter calculated ${surfaceUnit}`}
+                                                    />
+                                                    <span className="text-sm text-gray-600 min-w-[60px]">{surfaceUnit}</span>
+                                                  </div>
+                                                </div>
+                                              );
+                                              
+                                            default:
+                                              // Default to full area calculation
+                                              const defaultValue = baseValue;
+                                              if (surface.area_sqft !== defaultValue) {
+                                                updateDemoedSurface(locationName, roomIndex, surface.id, 'area_sqft', defaultValue);
+                                              }
+                                              return (
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-sm text-gray-600">Full area:</span>
+                                                  <span className="text-sm font-medium">{defaultValue.toFixed(surfaceUnit === 'each' ? 0 : 1)} {surfaceUnit}</span>
+                                                </div>
+                                              );
+                                          }
+                                        })()}
+                                      </div>
                                     </div>
-                                  )}
+                                    </div>
                                 </div>
                               </div>
                             ))}
@@ -626,7 +1284,7 @@ const DemoScope = () => {
           </button>
           <button
             onClick={handleNext}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 shadow-md"
+            className="px-6 py-2 bg-blue-600 text-gray-900 rounded-lg font-medium hover:bg-blue-700 shadow-md"
           >
             Continue to Work Scope →
           </button>

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     
     # OpenAI Configuration
     openai_api_key: Optional[str] = None
+    openai_text_model: str = "gpt-4o-mini"
+    openai_vision_model: str = "gpt-4o"
+    openai_advanced_model: str = "gpt-4o"
     
     # Anthropic Configuration
     anthropic_api_key: Optional[str] = None

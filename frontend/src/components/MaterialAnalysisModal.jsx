@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { buildApiUrl } from '../config/api';
+import AreaSelector from './MaterialAnalysis/AreaSelector';
 
 const MaterialAnalysisModal = ({ 
   isOpen, 
@@ -15,6 +16,10 @@ const MaterialAnalysisModal = ({
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [selectedMaterials, setSelectedMaterials] = useState({});
+  const [showAreaSelector, setShowAreaSelector] = useState(false);
+  const [selectedAreas, setSelectedAreas] = useState([]);
+  const [analysisProgress, setAnalysisProgress] = useState('');
+  const [analysisStep, setAnalysisStep] = useState(0);
   
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
@@ -28,6 +33,10 @@ const MaterialAnalysisModal = ({
       setError(null);
       setSelectedMaterials({});
       setIsAnalyzing(false);
+      setShowAreaSelector(false);
+      setSelectedAreas([]);
+      setAnalysisProgress('');
+      setAnalysisStep(0);
     }
   }, [isOpen]);
 
@@ -115,14 +124,34 @@ const MaterialAnalysisModal = ({
     }
   };
 
-  const analyzeImage = async () => {
+  const showAreaSelection = () => {
+    if (!imageFile) {
+      setError('Please select an image first');
+      return;
+    }
+    console.log('MaterialAnalysisModal: Opening area selector with selectedAreas:', selectedAreas.length, 'areas');
+    setShowAreaSelector(true);
+  };
+
+  const analyzeImage = async (areasToUse = null) => {
     if (!imageFile) {
       setError('Please select an image first');
       return;
     }
 
+    // Use provided areas or current selectedAreas
+    const areas = areasToUse || selectedAreas;
+
+    // Show area selector if no areas selected yet
+    if (areas.length === 0) {
+      setShowAreaSelector(true);
+      return;
+    }
+
     setIsAnalyzing(true);
     setError(null);
+    setAnalysisStep(1);
+    setAnalysisProgress('이미지 업로드 준비 중...');
 
     try {
       const formData = new FormData();
@@ -136,21 +165,38 @@ const MaterialAnalysisModal = ({
         formData.append('analysis_focus', JSON.stringify(analysisContext.focusTypes));
       }
 
+      // Add selected areas
+      if (areas.length > 0) {
+        formData.append('analysis_areas', JSON.stringify(areas));
+      }
+
+      setAnalysisStep(2);
+      setAnalysisProgress('AI에 이미지 전송 중...');
+
       const response = await fetch(buildApiUrl('/api/analyze-material'), {
         method: 'POST',
         body: formData,
       });
+
+      setAnalysisStep(3);
+      setAnalysisProgress('AI가 재료를 분석하고 있습니다...');
 
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Analysis failed');
       }
 
+      setAnalysisStep(4);
+      setAnalysisProgress('분석 결과 처리 중...');
+
       const results = await response.json();
       
       if (!results.success) {
         throw new Error(results.error_message || 'Analysis failed');
       }
+
+      setAnalysisStep(5);
+      setAnalysisProgress('완료!');
 
       setAnalysisResults(results);
       
@@ -168,6 +214,8 @@ const MaterialAnalysisModal = ({
       setError(err.message || 'Failed to analyze image');
     } finally {
       setIsAnalyzing(false);
+      setAnalysisProgress('');
+      setAnalysisStep(0);
     }
   };
 
@@ -235,7 +283,7 @@ const MaterialAnalysisModal = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden relative flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <div>
@@ -255,7 +303,7 @@ const MaterialAnalysisModal = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+        <div className="p-6 overflow-y-auto flex-1">
           {!imageFile ? (
             /* Image Upload Section */
             <div className="space-y-6">
@@ -333,6 +381,7 @@ const MaterialAnalysisModal = ({
                       setImagePreview(null);
                       setAnalysisResults(null);
                       setError(null);
+                      setSelectedAreas([]);
                     }}
                     className="text-sm text-red-600 hover:text-red-800"
                   >
@@ -348,29 +397,78 @@ const MaterialAnalysisModal = ({
                 </div>
               </div>
 
+              {/* Selected Areas Display */}
+              {selectedAreas.length > 0 && (
+                <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-green-800">
+                        {selectedAreas.length}개 영역이 선택됨
+                      </p>
+                      <p className="text-xs text-green-600 mt-1">
+                        선택된 영역만 분석됩니다
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowAreaSelector(true)}
+                      className="text-sm text-green-600 hover:text-green-800"
+                    >
+                      영역 수정
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Analysis Button */}
               {!analysisResults && (
                 <div className="text-center">
-                  <button
-                    onClick={analyzeImage}
-                    disabled={isAnalyzing}
-                    className="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
-                        <span>Analyzing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {selectedAreas.length === 0 ? (
+                    <button
+                      onClick={showAreaSelection}
+                      disabled={isAnalyzing}
+                      className="px-6 py-3 bg-blue-600 text-black rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                              d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4" />
+                      </svg>
+                      <span>영역 선택하기</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-center space-x-3">
+                      <button
+                        onClick={showAreaSelection}
+                        disabled={isAnalyzing}
+                        className="px-4 py-3 bg-gray-500 text-white rounded-lg font-medium hover:bg-gray-600 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center space-x-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4" />
                         </svg>
-                        <span>Analyze Materials</span>
-                      </>
-                    )}
-                  </button>
+                        <span>영역 다시 선택</span>
+                      </button>
+                      <button
+                        onClick={analyzeImage}
+                        disabled={isAnalyzing}
+                        className="px-6 py-3 bg-blue-600 text-black rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center space-x-2"
+                      >
+                        {isAnalyzing ? (
+                          <>
+                            <div className="animate-spin w-5 h-5 border-2 border-black border-t-transparent rounded-full"></div>
+                            <span>AI 분석 중...</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            <span>선택된 {selectedAreas.length}개 영역 분석하기</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -378,16 +476,31 @@ const MaterialAnalysisModal = ({
               {analysisResults && (
                 <div className="space-y-4">
                   <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                    <div className="flex items-center space-x-2">
-                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      <span className="font-medium text-green-800">Analysis Complete</span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className="font-medium text-green-800">Analysis Complete</span>
+                      </div>
+                      <button
+                        onClick={showAreaSelection}
+                        className="px-3 py-1 bg-white text-green-700 rounded border border-green-300 hover:bg-green-100 text-xs font-medium flex items-center space-x-1"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4" />
+                        </svg>
+                        <span>영역 다시 선택</span>
+                      </button>
                     </div>
                     <div className="mt-2 text-sm text-green-700 space-y-1">
                       <p>Found {analysisResults.materials.length} materials</p>
                       <p>Overall confidence: {analysisResults.overall_confidence.toFixed(1)}/10</p>
                       <p>Processing time: {analysisResults.processing_time.toFixed(1)}s</p>
+                      {selectedAreas.length > 0 && (
+                        <p>Analyzed {selectedAreas.length} selected areas</p>
+                      )}
                       {analysisResults.analysis_notes && (
                         <p className="text-xs mt-2">{analysisResults.analysis_notes}</p>
                       )}
@@ -474,7 +587,7 @@ const MaterialAnalysisModal = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between min-h-[80px] flex-shrink-0">
           <div className="text-sm text-gray-500">
             {analysisResults && (
               <span>
@@ -486,7 +599,7 @@ const MaterialAnalysisModal = ({
           <div className="flex items-center space-x-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 font-medium"
+              className="px-4 py-3 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 font-medium"
             >
               Cancel
             </button>
@@ -495,14 +608,77 @@ const MaterialAnalysisModal = ({
               <button
                 onClick={applySelectedMaterials}
                 disabled={Object.values(selectedMaterials).filter(Boolean).length === 0}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                className="px-6 py-3 bg-blue-600 text-black rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 Apply Selected Materials
               </button>
             )}
           </div>
         </div>
+
+        {/* Loading Overlay */}
+        {isAnalyzing && (
+          <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-10">
+            <div className="text-center max-w-md w-full px-6">
+              <div className="animate-spin w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full mx-auto mb-6"></div>
+              
+              <div className="space-y-4">
+                <h3 className="text-xl font-semibold text-gray-900">AI 이미지 분석 중</h3>
+                
+                {/* Progress Bar */}
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${(analysisStep / 5) * 100}%` }}
+                  ></div>
+                </div>
+                
+                {/* Progress Text */}
+                <div className="space-y-1">
+                  <p className="text-sm text-gray-600">
+                    {analysisProgress || '선택한 영역의 재료를 분석하고 있습니다...'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    단계 {analysisStep}/5 {analysisStep > 0 && `(${Math.round((analysisStep / 5) * 100)}%)`}
+                  </p>
+                </div>
+                
+                {/* Animated Dots */}
+                <div className="flex items-center justify-center space-x-1 mt-4">
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                </div>
+                
+                {/* Tips */}
+                <div className="mt-6 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-xs text-blue-600">
+                    💡 분석 시간은 이미지 크기와 복잡도에 따라 다를 수 있습니다
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Area Selector Modal */}
+      {showAreaSelector && imagePreview && (
+        <AreaSelector
+          image={imagePreview}
+          initialAreas={selectedAreas}
+          onAreasChange={(areas) => {
+            console.log('MaterialAnalysisModal: Areas changed from selector:', areas.length, 'areas');
+            setSelectedAreas(areas);
+            setShowAreaSelector(false);
+            // Automatically start analysis after area selection
+            if (areas.length > 0) {
+              setTimeout(() => analyzeImage(areas), 100);
+            }
+          }}
+          onClose={() => setShowAreaSelector(false)}
+        />
+      )}
     </div>
   );
 };

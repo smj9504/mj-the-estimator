@@ -9,6 +9,7 @@ import logging
 from typing import Dict, List, Any, Optional
 from abc import ABC, abstractmethod
 from utils.logger import logger
+from utils.prompts import ROOM_CLASSIFICATION_PROMPT, SINGLE_ROOM_CLASSIFICATION_PROMPT
 
 class DataFormatDetector:
     """Detects the format of measurement data"""
@@ -293,20 +294,7 @@ class CSVTableProcessor(BaseProcessor):
             
             candidates_text = '\n'.join(candidate_list)
             
-            prompt = f"""
-            Analyze these potential room names from a building floor plan and determine which are actual rooms:
-
-            {candidates_text}
-
-            For each item, consider:
-            - Is it a real living/functional space?
-            - Is the area reasonable for a room?
-            - Could it be an abbreviation or typo? (e.g., "Bthrm" → "Bathroom", "BR" → "Bedroom")
-            - Is it summary/aggregate data like "Total Area", "Plan Attributes"?
-
-            Respond with only a JSON array of true/false values in order:
-            Example: [true, false, true, false, true]
-            """
+            prompt = ROOM_CLASSIFICATION_PROMPT.format(candidates_text=candidates_text)
             
             if ai_service.ai_provider in ['openai', 'claude']:
                 response = ai_service.llm.invoke([{"role": "user", "content": prompt}])
@@ -538,17 +526,7 @@ class CSVTableProcessor(BaseProcessor):
             
             area_info = f" (Area: {area} sq ft)" if area else ""
             
-            prompt = f"""
-            Is "{room_name}"{area_info} a actual room in a building?
-            
-            Consider:
-            - Is it a real living/functional space?
-            - Is the area reasonable for a room?
-            - Could it be an abbreviation or typo? (e.g., "Bthrm" → "Bathroom")
-            - Is it summary/aggregate data like "Total Area", "Plan Attributes"?
-            
-            Respond with only "YES" or "NO".
-            """
+            prompt = SINGLE_ROOM_CLASSIFICATION_PROMPT.format(room_name=room_name, area_info=area_info)
             
             if ai_service.ai_provider in ['openai', 'claude']:
                 response = ai_service.llm.invoke([{"role": "user", "content": prompt}])
