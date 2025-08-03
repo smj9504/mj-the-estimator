@@ -1,7 +1,5 @@
 import os
 import uuid
-import pandas as pd
-from io import StringIO
 from typing import Tuple, Optional
 
 class FileService:

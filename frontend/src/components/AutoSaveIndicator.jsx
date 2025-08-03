@@ -1,4 +1,3 @@
-import React from 'react';
 import styles from './AutoSaveIndicator.module.css';
 
 const AutoSaveIndicator = ({ status = 'idle' }) => {

@@ -47,6 +47,16 @@ export const API_CONFIG = {
       FINAL_ESTIMATE: '/api/pre-estimate/final-estimate',
       DEMOLITION_SCOPE: '/api/pre-estimate/demolition-scope',
       DOWNLOAD: '/api/pre-estimate/download'
+    },
+    
+    // RAG-enhanced demo analysis endpoints
+    RAG_DEMO_ANALYSIS: {
+      COMPARE_BEFORE_AFTER: '/api/rag-demo-analysis/compare-before-after',
+      EXTRACT_FEATURES: '/api/rag-demo-analysis/extract-features',
+      ANALYZE_ENHANCED: '/api/rag-demo-analysis/analyze-enhanced',
+      ANALYZE_MULTI_STAGE: '/api/rag-demo-analysis/analyze-multi-stage',
+      RAG_QUERY: '/api/rag-demo-analysis/rag/query',
+      FEEDBACK: '/api/rag-demo-analysis/feedback'
     }
   }
 };

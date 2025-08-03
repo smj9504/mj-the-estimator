@@ -1,9 +1,8 @@
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 import uuid
 import json
-import asyncio
 from datetime import datetime
 import os
 import base64
@@ -14,9 +13,49 @@ from PIL import Image
 import sqlite3
 from models.database import get_db_connection
 from services.ai_service import OpenAIService
-from utils.prompts import DEMO_ANALYSIS_PROMPT, DEMO_ANALYSIS_USER_MESSAGE
+from utils.prompts import DEMO_ANALYSIS_PROMPT, DEMO_ANALYSIS_USER_MESSAGE, BATHROOM_DEMO_SCOPE_PROMPT
 
 router = APIRouter(prefix="/api/demo-analysis", tags=["demo-analysis"])
+
+def get_room_measurement_data(session_id: str, room_id: str) -> dict:
+    """Get measurement data for a specific room from the session"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT parsed_json FROM measurement_data 
+                WHERE session_id = ? 
+                ORDER BY created_at DESC LIMIT 1
+            """, (session_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return {}
+            
+            measurement_data = json.loads(result[0])
+            
+            # Find the specific room data
+            for location in measurement_data:
+                if location.get('location') == room_id:
+                    rooms = location.get('rooms', [])
+                    if rooms:
+                        # Get the first room (main room) dimensions for reference
+                        room = rooms[0]
+                        raw_dims = room.get('raw_dimensions', {})
+                        return {
+                            'room_area': raw_dims.get('area', 0),
+                            'room_length': raw_dims.get('length', 0),
+                            'room_width': raw_dims.get('width', 0),
+                            'room_height': raw_dims.get('height', 8),
+                            'room_name': room.get('name', 'Unknown'),
+                            'floor': room.get('floor', 'Unknown')
+                        }
+            
+            return {}
+            
+    except Exception as e:
+        print(f"Error getting room measurement data: {str(e)}")
+        return {}
 
 
 @router.post("/analyze")
@@ -25,7 +64,8 @@ async def analyze_demo_images(
     room_id: str = Form(...),
     room_type: str = Form(...),
     project_id: str = Form(...),
-    session_id: str = Form(...)
+    session_id: str = Form(...),
+    room_materials: Optional[str] = Form(None)
 ):
     """
     Analyze uploaded images to detect demolished areas using AI
@@ -92,11 +132,22 @@ async def analyze_demo_images(
                 "base64_data": base64_image
             })
         
+        # Parse room materials if provided
+        material_data = {}
+        if room_materials:
+            try:
+                material_data = json.loads(room_materials)
+            except json.JSONDecodeError:
+                material_data = {}
+        
+        # Get measurement data for the specific room to provide area reference
+        measurement_data = get_room_measurement_data(session_id, room_id)
+        
         # Call AI service for analysis
         ai_service = OpenAIService()
         
         # Analyze images
-        analysis_results = await analyze_images_with_ai(ai_service, processed_images, room_type)
+        analysis_results = await analyze_images_with_ai(ai_service, processed_images, room_type, material_data, measurement_data)
         
         # Save analysis to database
         with get_db_connection() as conn:
@@ -140,17 +191,76 @@ async def analyze_demo_images(
         print(f"Analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-async def analyze_images_with_ai(ai_service: OpenAIService, images: List[dict], room_type: str) -> dict:
+async def analyze_images_with_ai(ai_service: OpenAIService, images: List[dict], room_type: str, material_data: dict = None, measurement_data: dict = None) -> dict:
     """
     Analyze images using OpenAI Vision API
     """
     try:
-        # Prepare context for room type
+        # Prepare context for room type and materials
         room_context = f"This is a {room_type} room. "
+        
+        # Add room-specific analysis guidance
         if room_type.lower() == "kitchen":
-            room_context += "Look for demolished cabinets, countertops, backsplash, flooring."
+            room_context += "Look for demolished cabinets, countertops, backsplash, flooring, appliances. "
+            room_context += "Pay special attention to missing upper cabinets, lower cabinets, kitchen islands, and exposed plumbing/electrical where appliances were removed. "
         elif room_type.lower() == "bathroom":
-            room_context += "Look for demolished vanities, tile work, fixtures."
+            room_context += "BATHROOM RENOVATION - COMPREHENSIVE DEMOLITION ANALYSIS: "
+            room_context += "Assume these standard fixtures were removed unless clearly visible and undamaged: "
+            room_context += "1) Floor tiles/vinyl (100% of floor area), 2) Vanity cabinet (15-25 sq ft), 3) Toilet fixture (count as 1 unit), "
+            room_context += "4) Bathtub/shower (20-40 sq ft surround), 5) Bathroom mirror (8-15 sq ft), 6) Wall tiles in shower area (50-80 sq ft), "
+            room_context += "7) Plumbing fixtures (sink, faucets, towel bars). "
+            room_context += "CRITICAL: Protected fixtures indicate planned removal - include them in demolition scope. "
+            room_context += "Look for evidence: plumbing stubs, mounting holes, floor flanges, exposed subflooring, patched wall areas. "
+        
+        # Add material scope context if provided
+        if material_data:
+            room_context += f"\n\nMATERIAL SCOPE CONTEXT:\n"
+            room_context += "The following materials were expected in this room based on Material Scope data:\n"
+            
+            # Add floor materials
+            if material_data.get('material', {}).get('Floor'):
+                floor_materials = material_data['material']['Floor']
+                if isinstance(floor_materials, list):
+                    floor_materials = ', '.join(floor_materials)
+                room_context += f"- Floor: {floor_materials}\n"
+            
+            # Add wall materials
+            if material_data.get('material', {}).get('wall'):
+                wall_materials = material_data['material']['wall']
+                if isinstance(wall_materials, list):
+                    wall_materials = ', '.join(wall_materials)
+                room_context += f"- Wall: {wall_materials}\n"
+            
+            # Add ceiling materials
+            if material_data.get('material', {}).get('ceiling'):
+                ceiling_materials = material_data['material']['ceiling']
+                if isinstance(ceiling_materials, list):
+                    ceiling_materials = ', '.join(ceiling_materials)
+                room_context += f"- Ceiling: {ceiling_materials}\n"
+            
+            # Add any overridden materials
+            if material_data.get('material_override'):
+                room_context += "\nRoom-specific material overrides:\n"
+                for surface, materials in material_data['material_override'].items():
+                    if materials and materials != 'N/A':
+                        if isinstance(materials, list):
+                            materials = ', '.join(materials)
+                        room_context += f"- {surface}: {materials}\n"
+            
+            room_context += "\nWhen analyzing demolition, consider these expected materials and identify which specific materials were removed.\n"
+        
+        # Add measurement data context for accurate area calculations
+        if measurement_data and measurement_data.get('room_area', 0) > 0:
+            room_context += f"\n\nROOM MEASUREMENT REFERENCE:\n"
+            room_context += f"- Room Name: {measurement_data.get('room_name', 'Unknown')}\n"
+            room_context += f"- Total Room Area: {measurement_data.get('room_area', 0):.1f} sq ft\n"
+            room_context += f"- Room Dimensions: {measurement_data.get('room_length', 0):.1f} ft × {measurement_data.get('room_width', 0):.1f} ft\n"
+            room_context += f"- Room Height: {measurement_data.get('room_height', 8):.1f} ft\n"
+            room_context += f"- Floor: {measurement_data.get('floor', 'Unknown')}\n"
+            room_context += "\nIMPORTANT: Use these room dimensions as reference when estimating demolished areas. "
+            room_context += "Calculate demolished areas as realistic portions/percentages of the total room area. "
+            room_context += "For example, if you see a wall section demolished, estimate what percentage of the total wall area it represents. "
+            room_context += "Use logical proportions based on typical room layouts and construction.\n"
         
         # Format the prompt using the template
         formatted_prompt = DEMO_ANALYSIS_PROMPT.format(room_context=room_context)
@@ -200,6 +310,9 @@ async def analyze_images_with_ai(ai_service: OpenAIService, images: List[dict], 
             cleaned_response = cleaned_response.strip()
             
             parsed_results = json.loads(cleaned_response)
+            
+            # Debug: Log the parsed results
+            print(f"🔍 Parsed AI response: {json.dumps(parsed_results, indent=2)}")
             
             # Validate response structure
             if "demolished_areas" not in parsed_results:

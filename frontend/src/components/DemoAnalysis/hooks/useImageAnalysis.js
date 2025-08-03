@@ -4,7 +4,7 @@ export const useImageAnalysis = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
 
-  const analyzeImages = useCallback(async ({ images, roomId, roomType, projectId, sessionId }) => {
+  const analyzeImages = useCallback(async ({ images, roomId, roomType, projectId, sessionId, roomMaterials }) => {
     setIsAnalyzing(true);
     setError(null);
 
@@ -20,6 +20,11 @@ export const useImageAnalysis = () => {
       formData.append('room_type', roomType);
       formData.append('project_id', projectId);
       formData.append('session_id', sessionId);
+      
+      // Add room materials if provided
+      if (roomMaterials) {
+        formData.append('room_materials', JSON.stringify(roomMaterials));
+      }
 
       // Call AI analysis API
       const response = await fetch('http://localhost:8001/api/demo-analysis/analyze', {
@@ -43,16 +48,14 @@ export const useImageAnalysis = () => {
         demolished_areas: result.demolished_areas.map((area, index) => ({
           id: `area_${index + 1}`,
           type: area.surface_type,
-          material: area.material,
+          material: area.material || area.material_removed,
           description: area.description,
-          boundaries: {
-            type: 'polygon',
-            coordinates: area.boundaries,
-            image_ref: area.image_ref || 'img_1'
-          },
           ai_estimated_area: area.estimated_area_sqft,
           confidence: area.confidence || 0.85,
-          reference_objects: area.reference_objects || []
+          demolition_completeness: area.demolition_completeness,
+          completion_percentage: area.completion_percentage,
+          total_possible_area_sqft: area.total_possible_area_sqft,
+          partial_description: area.partial_description
         })),
         reference_objects: result.reference_objects || [],
         model_version: result.model_version || 'v1.0',

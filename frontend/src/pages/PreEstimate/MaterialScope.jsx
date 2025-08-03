@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MaterialAnalysisModal from '../../components/MaterialAnalysisModal';
 import { useAutoSave, autoSaveAPI } from '../../utils/autoSave';
 import AutoSaveIndicator from '../../components/AutoSaveIndicator';
 
-const MaterialScope = () => {
+const MaterialScope = React.memo(() => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const sessionId = searchParams.get('session');
@@ -36,8 +36,8 @@ const MaterialScope = () => {
   // Locations and rooms state
   const [locations, setLocations] = useState([]);
 
-  // Function to synchronize locations with measurement data while preserving existing settings
-  const synchronizeLocationsWithMeasurementData = (measurementData, existingLocations) => {
+  // Function to synchronize locations with measurement data while preserving existing settings - memoized
+  const synchronizeLocationsWithMeasurementData = useCallback((measurementData, existingLocations) => {
     const syncedLocations = measurementData.map(locationData => {
       // Find existing location data
       const existingLocation = existingLocations.find(loc => loc.location === locationData.location);
@@ -81,7 +81,7 @@ const MaterialScope = () => {
     });
     
     return syncedLocations;
-  };
+  }, []);
 
   // Load measurement data and initialize locations
   useEffect(() => {
@@ -285,43 +285,29 @@ const MaterialScope = () => {
     };
   }, [sessionId, measurementData, locations]);
 
-  // Create a stable reference to auto-save function
-  const autoSaveRef = useRef(null);
-  
-  // Setup auto-save only once
-  useEffect(() => {
-    if (!sessionId) return;
-    
-    const { save, cleanup } = useAutoSave(
-      `material-scope-${sessionId}`,
-      async (data) => {
-        await autoSaveAPI.saveMaterialScope(sessionId, {
-          scopeData: data.scopeData,
-          roomOpenings: {},  // Add room openings data if needed
-          mergedRooms: {}    // Add merged rooms data if needed
-        });
-        
-        // Also save to sessionStorage for backward compatibility
-        sessionStorage.setItem(`materialScope_${sessionId}`, JSON.stringify(data.scopeData));
-      },
-      {
-        debounceTime: 2000,
-        periodicSaveInterval: 30000,
-        onStatusChange: setAutoSaveStatus
-      }
-    );
-    
-    autoSaveRef.current = save;
-    
-    // Cleanup on unmount
-    return () => {
-      cleanup();
-    };
-  }, [sessionId]); // Only recreate when sessionId changes
+  // Setup auto-save
+  const { save: autoSave } = useAutoSave(
+    sessionId ? `material-scope-${sessionId}` : '',
+    sessionId ? async (data) => {
+      await autoSaveAPI.saveMaterialScope(sessionId, {
+        scopeData: data.scopeData,
+        roomOpenings: {},  // Add room openings data if needed
+        mergedRooms: {}    // Add merged rooms data if needed
+      });
+      
+      // Also save to sessionStorage for backward compatibility
+      sessionStorage.setItem(`materialScope_${sessionId}`, JSON.stringify(data.scopeData));
+    } : null,
+    {
+      debounceTime: 2000,
+      periodicSaveInterval: 30000,
+      onStatusChange: setAutoSaveStatus
+    }
+  );
 
   // Auto-save when data changes
   useEffect(() => {
-    if (sessionId && autoSaveRef.current && (defaultScope || locations.length > 0)) {
+    if (sessionId && autoSave && (defaultScope || locations.length > 0)) {
       const materialScopeData = {
         scopeData: {
           default_scope: defaultScope,
@@ -329,9 +315,9 @@ const MaterialScope = () => {
         }
       };
       
-      autoSaveRef.current(materialScopeData);
+      autoSave(materialScopeData);
     }
-  }, [sessionId, defaultScope, locations]);
+  }, [sessionId, defaultScope, locations, autoSave]);
 
   // Update locations when they change
   useEffect(() => {
@@ -345,7 +331,7 @@ const MaterialScope = () => {
     }
   }, [locations]);
 
-  const handleDefaultScopeChange = (category, key, value, action = 'set') => {
+  const handleDefaultScopeChange = useCallback((category, key, value, action = 'set') => {
     setDefaultScope(prev => {
       const newScope = { ...prev };
       
@@ -393,27 +379,27 @@ const MaterialScope = () => {
           };
         } else if (!anyMaterialNeedsUnderlayment && hasUnderlayment) {
           // Remove underlayment
-          const { [key]: removed, ...restUnderlayment } = prev.material_underlayment;
+          const { [key]: _removed, ...restUnderlayment } = prev.material_underlayment;
           newScope.material_underlayment = restUnderlayment;
         }
       }
       
       return newScope;
     });
-  };
+  }, [ensureArray, needsUnderlayment, addMaterialToArray, removeMaterialFromArray, updateMaterialInArray]);
 
-  // Materials that may need underlayment
-  const materialsWithUnderlayment = ['carpet', 'laminate', 'vinyl', 'engineered hardwood', 'luxury vinyl plank'];
+  // Materials that may need underlayment - memoized to prevent recreation
+  const materialsWithUnderlayment = useMemo(() => ['carpet', 'laminate', 'vinyl', 'engineered hardwood', 'luxury vinyl plank'], []);
 
-  // Helper function to check if material needs underlayment
-  const needsUnderlayment = (materialValue) => {
+  // Helper function to check if material needs underlayment - memoized
+  const needsUnderlayment = useCallback((materialValue) => {
     if (!materialValue) return false;
     const lowerMaterial = materialValue.toLowerCase();
     return materialsWithUnderlayment.some(material => lowerMaterial.includes(material));
-  };
+  }, [materialsWithUnderlayment]);
 
-  // Migration helper functions to convert old single-material format to new array format
-  const migrateToArrayFormat = (scope) => {
+  // Migration helper functions to convert old single-material format to new array format - memoized
+  const migrateToArrayFormat = useCallback((scope) => {
     if (!scope) return defaultScope;
     
     const migratedScope = {
@@ -436,9 +422,9 @@ const MaterialScope = () => {
     }
     
     return migratedScope;
-  };
+  }, [ensureArray]);
 
-  const migrateObjectToArrayFormat = (obj) => {
+  const migrateObjectToArrayFormat = useCallback((obj) => {
     if (!obj) return {};
     
     const migratedObj = {};
@@ -447,29 +433,29 @@ const MaterialScope = () => {
     });
     
     return migratedObj;
-  };
+  }, [ensureArray]);
 
-  // Helper functions for multi-material handling
-  const ensureArray = (value) => {
+  // Helper functions for multi-material handling - memoized
+  const ensureArray = useCallback((value) => {
     if (Array.isArray(value)) return value;
     if (value === undefined || value === null || value === '') return [];
     return [value];
-  };
+  }, []);
 
-  const addMaterialToArray = (materialArray, newMaterial) => {
+  const addMaterialToArray = useCallback((materialArray, newMaterial) => {
     const array = ensureArray(materialArray);
     if (newMaterial && !array.includes(newMaterial)) {
       return [...array, newMaterial];
     }
     return array;
-  };
+  }, [ensureArray]);
 
-  const removeMaterialFromArray = (materialArray, materialToRemove) => {
+  const removeMaterialFromArray = useCallback((materialArray, materialToRemove) => {
     const array = ensureArray(materialArray);
     return array.filter(material => material !== materialToRemove);
-  };
+  }, [ensureArray]);
 
-  const updateMaterialInArray = (materialArray, oldMaterial, newMaterial) => {
+  const updateMaterialInArray = useCallback((materialArray, oldMaterial, newMaterial) => {
     if (!newMaterial) return ensureArray(materialArray);
     const array = ensureArray(materialArray);
     const index = array.indexOf(oldMaterial);
@@ -479,9 +465,9 @@ const MaterialScope = () => {
       return updated;
     }
     return array;
-  };
+  }, [ensureArray]);
 
-  const updateRoom = (locationIndex, roomIndex, field, value, action = 'set') => {
+  const updateRoom = useCallback((locationIndex, roomIndex, field, value, action = 'set') => {
     const newLocations = [...locations];
     
     if (field.includes('.')) {
@@ -528,27 +514,27 @@ const MaterialScope = () => {
         room: newLocations[locationIndex].rooms[roomIndex]
       });
     }
-  };
+  }, [locations, selectedRoom, ensureArray, addMaterialToArray, removeMaterialFromArray, updateMaterialInArray]);
 
-  const handleRoomSelect = (location, locationIndex, room, roomIndex) => {
+  const handleRoomSelect = useCallback((location, locationIndex, room, roomIndex) => {
     setSelectedRoom({
       location,
       locationIndex,
       room,
       roomIndex
     });
-  };
+  }, []);
 
-  const saveData = () => {
+  const saveData = useCallback(() => {
     const materialScopeData = {
       default_scope: defaultScope,
       locations: locations
     };
     
     sessionStorage.setItem(`materialScope_${sessionId}`, JSON.stringify(materialScopeData));
-  };
+  }, [defaultScope, locations, sessionId]);
 
-  const handleNext = async () => {
+  const handleNext = useCallback(async () => {
     try {
       saveData();
       
@@ -570,13 +556,13 @@ const MaterialScope = () => {
       // Still navigate even if saving fails
       navigate(`/pre-estimate/demo-scope?session=${sessionId}`);
     }
-  };
+  }, [saveData, sessionId, navigate]);
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     navigate(`/pre-estimate/opening-verification?session=${sessionId}`);
-  };
+  }, [navigate, sessionId]);
 
-  const handleAnalysisResults = (suggestions, detectedMaterials) => {
+  const handleAnalysisResults = useCallback((suggestions, detectedMaterials) => {
     try {
       console.log('Applying AI analysis results:', { suggestions, detectedMaterials });
       
@@ -612,9 +598,9 @@ const MaterialScope = () => {
       console.error('Error applying analysis results:', error);
       alert('Failed to apply analysis results. Please try again.');
     }
-  };
+  }, [defaultScope, ensureArray, addMaterialToArray]);
 
-  const handleRoomAnalysisResults = (suggestions, detectedMaterials) => {
+  const handleRoomAnalysisResults = useCallback((suggestions, detectedMaterials) => {
     try {
       console.log('Applying room-specific AI analysis results:', { suggestions, detectedMaterials, roomAnalysisTarget });
       
@@ -666,18 +652,18 @@ const MaterialScope = () => {
       console.error('Error applying room analysis results:', error);
       alert('Failed to apply analysis results. Please try again.');
     }
-  };
+  }, [roomAnalysisTarget, locations, ensureArray, addMaterialToArray, selectedRoom]);
 
-  const openAnalysisModal = () => {
+  const openAnalysisModal = useCallback(() => {
     setIsAnalysisModalOpen(true);
-  };
+  }, []);
 
-  const openRoomAnalysisModal = (locationIndex, roomIndex) => {
+  const openRoomAnalysisModal = useCallback((locationIndex, roomIndex) => {
     setRoomAnalysisTarget({ locationIndex, roomIndex });
     setIsRoomAnalysisModalOpen(true);
-  };
+  }, []);
 
-  const getRoomTypeContext = () => {
+  const getRoomTypeContext = useCallback(() => {
     if (!selectedRoom?.room) return null;
     
     // Try to infer room type from room name
@@ -692,9 +678,9 @@ const MaterialScope = () => {
     if (roomName.includes('laundry')) return 'laundry room';
     
     return null;
-  };
+  }, [selectedRoom]);
 
-  const getRoomTypeContextForTarget = (target) => {
+  const getRoomTypeContextForTarget = useCallback((target) => {
     if (!target || !locations[target.locationIndex]?.rooms[target.roomIndex]) return null;
     
     // Try to infer room type from room name
@@ -709,7 +695,7 @@ const MaterialScope = () => {
     if (roomName.includes('laundry')) return 'laundry room';
     
     return null;
-  };
+  }, [locations]);
 
   if (loading) {
     return (
@@ -898,7 +884,7 @@ const MaterialScope = () => {
                     {locations.flatMap(location => 
                       location.rooms
                         .filter(room => room.use_default_material === 'N')
-                        .map((room, roomIndex) => {
+                        .map((room) => {
                           const hasCustomMaterials = Object.keys(room.material_override || {}).length > 0;
                           const hasCustomUnderlayments = Object.keys(room.material_underlayment_override || {}).length > 0;
                           
@@ -1768,6 +1754,8 @@ const MaterialScope = () => {
       />
     </div>
   );
-};
+});
+
+MaterialScope.displayName = 'MaterialScope';
 
 export default MaterialScope;

@@ -1,13 +1,21 @@
 import json
 import os
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
-from utils.prompts import MEASUREMENT_PROMPT, DEMO_SCOPE_PROMPT, WORK_SCOPE_PROMPT, TEXT_CLEANUP_PROMPT, MATERIAL_ANALYSIS_VISION_PROMPT, AREA_CALCULATION_PROMPT
+from utils.prompts import MEASUREMENT_PROMPT, DEMO_SCOPE_PROMPT, WORK_SCOPE_PROMPT, TEXT_CLEANUP_PROMPT, MATERIAL_ANALYSIS_VISION_PROMPT, AREA_CALCULATION_PROMPT, BEFORE_AFTER_COMPARISON_PROMPT
 from utils.logger import logger
 import time
 from services.measurement_processor import measurement_processor
 from services.room_calculator import calculation_engine
 from config import settings
+
+# Import RAG service
+try:
+    from services.rag_service import rag_service
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    logger.warning("RAG service not available")
 
 # Load environment variables at module level
 load_dotenv()
@@ -18,6 +26,7 @@ class AIService:
         self.mock_mode = False
         self.ai_provider = 'openai'
         self.progress_store = {}  # Store progress data for each session
+        self.vision_cache = {}  # Cache for Google Vision results
         
         # Load AI model configurations from settings
         self.models = {
@@ -612,7 +621,7 @@ class AIService:
     
     def analyze_image_with_text(self, base64_image: str, prompt: str) -> str:
         """
-        Analyze image with text prompt using AI vision capabilities
+        Analyze single image with text prompt using AI vision capabilities
         
         Args:
             base64_image: Base64 encoded image
@@ -621,29 +630,84 @@ class AIService:
         Returns:
             AI response as string
         """
-        logger.info(f"Image analysis - mock_mode: {self.mock_mode}, ai_provider: {self.ai_provider}")
+        # Delegate to multi-image handler with single image
+        return self.analyze_multiple_images([base64_image], prompt)
+    
+    def analyze_multiple_images(self, base64_images: List[str], prompt: str) -> str:
+        """
+        Analyze multiple images with text prompt using AI vision capabilities
+        
+        Args:
+            base64_images: List of Base64 encoded images
+            prompt: Text prompt for analysis
+            
+        Returns:
+            AI response as string
+        """
+        logger.info(f"Multi-image analysis - mock_mode: {self.mock_mode}, ai_provider: {self.ai_provider}, image_count: {len(base64_images)}")
         
         if self.mock_mode:
             logger.info("Using mock mode for image analysis")
             return self._get_mock_image_analysis()
         
         try:
+            response = None
+            
+            # Try Google Vision first
+            logger.info("Trying Google Vision API first")
+            try:
+                response = self._analyze_images_google_vision(base64_images, prompt)
+                if response and not self._is_refusal_response(response):
+                    logger.info("Google Vision API successfully analyzed the images")
+                    return response
+                else:
+                    logger.warning("Google Vision API refused or failed to analyze images")
+            except Exception as e:
+                logger.warning(f"Google Vision API failed: {str(e)}")
+            
+            # Then try configured provider
             if self.ai_provider == "openai":
-                logger.info("Using OpenAI for image analysis")
-                return self._analyze_image_openai(base64_image, prompt)
+                logger.info("Trying OpenAI as fallback")
+                response = self._analyze_images_openai(base64_images, prompt)
+                
+                # Check if OpenAI refused to analyze
+                if response and not self._is_refusal_response(response):
+                    return response
+                elif hasattr(self, '_analyze_images_claude'):
+                    logger.warning("OpenAI refused to analyze images, trying Claude fallback")
+                    response = self._analyze_images_claude(base64_images, prompt)
+                    
             elif self.ai_provider == "claude":
-                logger.info("Using Claude for image analysis") 
-                return self._analyze_image_claude(base64_image, prompt)
-            else:
-                logger.warning(f"No image analysis provider available (provider: {self.ai_provider}), using mock response")
+                logger.info("Trying Claude as fallback") 
+                response = self._analyze_images_claude(base64_images, prompt)
+                
+                # Check if Claude refused to analyze
+                if response and not self._is_refusal_response(response):
+                    return response
+                else:
+                    logger.warning("Claude refused to analyze images, trying OpenAI fallback")
+                    response = self._analyze_images_openai(base64_images, prompt)
+            
+            # If still no valid response, use mock
+            if not response or self._is_refusal_response(response):
+                logger.warning(f"All AI providers failed or refused, using mock response")
                 return self._get_mock_image_analysis()
                 
+            return response
+                
         except Exception as e:
-            logger.error(f"Image analysis failed: {str(e)}")
+            logger.error(f"Multi-image analysis failed: {str(e)}")
             return self._get_mock_image_analysis()
     
-    def _analyze_image_openai(self, base64_image: str, prompt: str) -> str:
-        """Analyze image using OpenAI GPT-4 Vision"""
+    def _is_refusal_response(self, response: str) -> bool:
+        """Check if the response is a refusal from AI"""
+        if not response:
+            return True
+        refusal_patterns = ["I'm sorry", "can't assist", "cannot analyze", "unable to analyze", "cannot process"]
+        return any(pattern.lower() in response.lower() for pattern in refusal_patterns)
+    
+    def _analyze_images_openai(self, base64_images: List[str], prompt: str) -> str:
+        """Analyze multiple images using OpenAI GPT-4 Vision"""
         try:
             from langchain_openai import ChatOpenAI
             import os
@@ -662,22 +726,23 @@ class AIService:
                 temperature=0.1
             )
             
-            # Create detailed prompt for material analysis using template
-            material_analysis_prompt = MATERIAL_ANALYSIS_VISION_PROMPT.format(base_prompt=prompt)
+            # Create content with all images
+            content = [{"type": "text", "text": prompt}]
+            
+            # Add all images to the content
+            for i, base64_image in enumerate(base64_images):
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}",
+                        "detail": "high"
+                    }
+                })
             
             messages = [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": material_analysis_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": "high"
-                            }
-                        }
-                    ]
+                    "content": content
                 }
             ]
             
@@ -688,8 +753,8 @@ class AIService:
             logger.error(f"OpenAI image analysis failed: {str(e)}")
             raise
     
-    def _analyze_image_claude(self, base64_image: str, prompt: str) -> str:
-        """Analyze image using Claude Vision"""
+    def _analyze_images_claude(self, base64_images: List[str], prompt: str) -> str:
+        """Analyze multiple images using Claude Vision"""
         try:
             from langchain_anthropic import ChatAnthropic
             
@@ -700,20 +765,24 @@ class AIService:
                 temperature=0.1
             )
             
+            # Create content with all images
+            content = [{"type": "text", "text": prompt}]
+            
+            # Add all images to the content
+            for base64_image in base64_images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": base64_image
+                    }
+                })
+            
             messages = [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": base64_image
-                            }
-                        }
-                    ]
+                    "content": content
                 }
             ]
             
@@ -724,40 +793,296 @@ class AIService:
             logger.error(f"Claude image analysis failed: {str(e)}")
             raise
     
+    def _analyze_images_google_vision(self, base64_images: List[str], prompt: str) -> str:
+        """Analyze multiple images using Google Vision API with GPT-4 for structured response"""
+        try:
+            from google.cloud import vision
+            import base64
+            import io
+            import hashlib
+            
+            # Create cache key from images and prompt
+            cache_key = hashlib.md5((str(base64_images[:1]) + prompt[:100]).encode()).hexdigest()
+            
+            # Check cache first
+            if cache_key in self.vision_cache:
+                logger.info("🔍 Using cached Google Vision results")
+                return self.vision_cache[cache_key]
+            
+            # Initialize Google Vision client
+            # Note: Requires GOOGLE_APPLICATION_CREDENTIALS environment variable
+            client = vision.ImageAnnotatorClient()
+            
+            # Prepare features for detection
+            features = [
+                vision.Feature(type_=vision.Feature.Type.LABEL_DETECTION, max_results=20),
+                vision.Feature(type_=vision.Feature.Type.OBJECT_LOCALIZATION, max_results=20),
+                vision.Feature(type_=vision.Feature.Type.TEXT_DETECTION),
+                vision.Feature(type_=vision.Feature.Type.IMAGE_PROPERTIES),
+                vision.Feature(type_=vision.Feature.Type.SAFE_SEARCH_DETECTION),
+            ]
+            
+            # Define construction-related keywords (whitelist approach)
+            construction_keywords = {
+                # Building structure
+                'wall', 'ceiling', 'floor', 'room', 'door', 'window', 'roof', 'foundation',
+                'stud', 'studs', 'framing', 'joist', 'joists', 'beam', 'beams',
+                # Materials
+                'tile', 'tiles', 'tiling', 'wood', 'hardwood', 'laminate', 'vinyl', 'carpet',
+                'drywall', 'plaster', 'paint', 'brick', 'concrete', 'stone', 'marble',
+                'sheetrock', 'gypsum', 'wallboard',
+                # Fixtures and systems
+                'toilet', 'sink', 'shower', 'bathtub', 'faucet', 'fixture', 'light',
+                'plumbing', 'electrical', 'hvac', 'duct', 'pipe', 'wire', 'outlet',
+                # Work-related
+                'construction', 'renovation', 'demolition', 'building', 'remodel',
+                'repair', 'install', 'remove', 'demo', 'work', 'project',
+                # Rooms
+                'bathroom', 'kitchen', 'bedroom', 'living', 'dining', 'basement', 'attic',
+                # Components
+                'cabinet', 'counter', 'countertop', 'vanity', 'mirror', 'shelf', 'closet',
+                'stair', 'railing', 'baseboard', 'trim', 'molding', 'insulation',
+                # Tools and equipment (construction context)
+                'ladder', 'scaffold', 'tool', 'equipment'
+            }
+            
+            def is_construction_related(item):
+                """Check if an item is construction-related using keyword matching"""
+                item_lower = item.lower()
+                # Check for exact matches or partial matches
+                return any(keyword in item_lower for keyword in construction_keywords)
+            
+            # Process all images
+            all_labels = []
+            all_objects = []
+            all_texts = []
+            
+            logger.info(f"🔍 Google Vision: Processing {len(base64_images)} images")
+            
+            for i, base64_image in enumerate(base64_images):
+                logger.info(f"  - Processing image {i+1}/{len(base64_images)}")
+                
+                # Decode base64 image
+                image_data = base64.b64decode(base64_image)
+                image = vision.Image(content=image_data)
+                
+                # Analyze image
+                request = vision.AnnotateImageRequest(image=image, features=features)
+                response = client.annotate_image(request=request)
+                
+                # Extract relevant information with filtering
+                labels = [label.description for label in response.label_annotations 
+                         if is_construction_related(label.description)]
+                objects = [obj.name for obj in response.localized_object_annotations 
+                          if is_construction_related(obj.name)]
+                text = response.text_annotations[0].description if response.text_annotations else ""
+                
+                # Log both raw and filtered results
+                raw_labels = [label.description for label in response.label_annotations]
+                raw_objects = [obj.name for obj in response.localized_object_annotations]
+                
+                logger.info(f"    Raw labels: {', '.join(raw_labels[:10])}{'...' if len(raw_labels) > 10 else ''}")
+                logger.info(f"    Raw objects: {', '.join(raw_objects[:10])}{'...' if len(raw_objects) > 10 else ''}")
+                logger.info(f"    Filtered labels: {', '.join(labels[:5])}{'...' if len(labels) > 5 else ''}")
+                logger.info(f"    Filtered objects: {', '.join(objects[:5])}{'...' if len(objects) > 5 else ''}")
+                
+                all_labels.extend(labels)
+                all_objects.extend(objects)
+                if text:
+                    all_texts.append(f"Image {i+1}: {text}")
+            
+            # Create a structured description from Vision API results
+            vision_description = f"""
+Google Vision API detected the following construction-related items across {len(base64_images)} images:
+- Construction-related labels: {', '.join(list(set(all_labels))[:15])}
+- Construction-related objects: {', '.join(list(set(all_objects))[:15])}
+
+IMPORTANT: You must analyze ALL {len(base64_images)} images provided below. Each image may show different areas or stages of renovation. Count and analyze each image separately.
+            """
+            
+            # Use GPT-4 to convert Vision API results into our required JSON format
+            combined_prompt = vision_description + "\n\n" + prompt
+            
+            # If we have OpenAI available, use it to structure the response with images
+            if os.getenv('OPENAI_API_KEY'):
+                try:
+                    # Use OpenAI with both the Vision results AND the images
+                    result = self._analyze_with_openai_vision(combined_prompt, base64_images)
+                    # Cache the result
+                    self.vision_cache[cache_key] = result
+                    return result
+                except Exception as e:
+                    logger.warning(f"OpenAI vision analysis failed: {e}")
+                    # Fallback to text-only analysis
+                    return self._analyze_with_openai_text(combined_prompt)
+            else:
+                # Convert Vision API results directly to expected format
+                return self._convert_vision_to_json(all_labels, all_objects, '; '.join(all_texts))
+                
+        except Exception as e:
+            logger.error(f"Google Vision API analysis failed: {str(e)}")
+            raise
+    
+    def _convert_vision_to_json(self, labels: List[str], objects: List[str], text: str) -> str:
+        """Convert Google Vision results to expected JSON format"""
+        # Simple heuristic-based conversion
+        detected_elements = []
+        
+        # Check for common renovation/demolition indicators
+        demolition_keywords = ['construction', 'renovation', 'demolition', 'removal', 'exposed', 'brick', 'concrete', 'pipe']
+        has_demolition = any(keyword in ' '.join(labels + objects).lower() for keyword in demolition_keywords)
+        
+        if has_demolition:
+            # Look for specific removed elements
+            if any(word in ' '.join(labels + objects).lower() for word in ['toilet', 'bathroom', 'plumbing']):
+                detected_elements.append({
+                    "element_type": "toilet",
+                    "original_material": "standard fixture",
+                    "removal_evidence": ["plumbing_visible"],
+                    "confidence_level": 0.7,
+                    "detection_method": "google_vision_detection",
+                    "area_affected": 3.5,
+                    "removal_completeness": "complete",
+                    "replacement_indication": "likely_planned"
+                })
+            
+            if any(word in ' '.join(labels + objects).lower() for word in ['tile', 'wall', 'brick', 'exposed']):
+                detected_elements.append({
+                    "element_type": "wall_finish",
+                    "original_material": "tiles or drywall",
+                    "removal_evidence": ["exposed_substrate"],
+                    "confidence_level": 0.8,
+                    "detection_method": "google_vision_detection",
+                    "area_affected": 25.0,
+                    "removal_completeness": "complete",
+                    "replacement_indication": "definitely_planned"
+                })
+        
+        return json.dumps({
+            "forensic_analysis": {
+                "demolition_type": "selective" if detected_elements else "none",
+                "demolition_quality": "professional",
+                "work_sequence": "in_progress",
+                "safety_evidence": "adequate"
+            },
+            "detected_removed_elements": detected_elements,
+            "inference_summary": {
+                "total_elements_removed": len(detected_elements),
+                "renovation_scope": "partial",
+                "primary_removal_methods": ["professional_demolition"],
+                "estimated_completion": 50
+            }
+        })
+    
+    def _analyze_with_openai_vision(self, prompt: str, base64_images: List[str]) -> str:
+        """Use OpenAI vision model to analyze images with Google Vision context"""
+        try:
+            from langchain_openai import ChatOpenAI
+            
+            # Use vision model
+            vision_model = ChatOpenAI(
+                model=self.models['advanced'],
+                api_key=os.getenv('OPENAI_API_KEY'),
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            # Create content with text and all images
+            content = [{"type": "text", "text": prompt}]
+            
+            # Add all images
+            for base64_image in base64_images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}",
+                        "detail": "high"
+                    }
+                })
+            
+            messages = [{"role": "user", "content": content}]
+            
+            response = vision_model.invoke(messages)
+            return response.content
+            
+        except Exception as e:
+            logger.error(f"OpenAI vision analysis with images failed: {e}")
+            raise
+    
+    def _analyze_with_openai_text(self, prompt: str) -> str:
+        """Use OpenAI text model to structure the response"""
+        try:
+            from langchain_openai import ChatOpenAI
+            
+            # Use text model for structuring
+            llm = ChatOpenAI(
+                model=self.models['text'],
+                api_key=os.getenv('OPENAI_API_KEY'),
+                temperature=0.1
+            )
+            
+            response = llm.invoke(prompt)
+            return response.content
+        except:
+            # Fallback to simple conversion
+            return self._convert_vision_to_json([], [], "")
+    
     def _get_mock_image_analysis(self) -> str:
         """Return mock image analysis response for testing"""
-        return '''[
-            {
-                "material_type": "floor",
-                "material_name": "Laminate Wood",
-                "confidence_score": 8.5,
-                "description": "Light oak-colored laminate flooring with realistic wood grain texture. Appears to be a floating floor installation with tight joints.",
-                "underlayment_needed": true,
-                "recommended_underlayment": "6mm foam pad",
-                "color": "Light Oak",
-                "texture": "Wood grain with smooth surface"
+        # Return appropriate mock response based on the context
+        # This is a fallback when AI providers refuse to analyze
+        return '''{
+            "forensic_analysis": {
+                "demolition_type": "selective",
+                "demolition_quality": "professional",
+                "work_sequence": "systematic",
+                "safety_evidence": "proper"
             },
-            {
-                "material_type": "wall",
-                "material_name": "Painted Drywall",
-                "confidence_score": 9.0,
-                "description": "Standard drywall construction with smooth finish and white or off-white paint. Clean, modern appearance with no visible texture.",
-                "underlayment_needed": false,
-                "recommended_underlayment": null,
-                "color": "White/Off-white",
-                "texture": "Smooth painted surface"
-            },
-            {
-                "material_type": "baseboard",
-                "material_name": "White Painted Wood",
-                "confidence_score": 7.5,
-                "description": "Traditional wood baseboard trim with clean white paint finish. Standard residential height approximately 3-4 inches.",
-                "underlayment_needed": false,
-                "recommended_underlayment": null,
-                "color": "White",
-                "texture": "Smooth painted wood"
+            "detected_removed_elements": [
+                {
+                    "element_type": "toilet",
+                    "original_material": "standard porcelain toilet",
+                    "removal_evidence": ["floor_flange", "water_supply_valve", "wax_ring_residue"],
+                    "confidence_level": 0.85,
+                    "detection_method": "utility_evidence",
+                    "original_dimensions": {"width": 18, "depth": 28, "height": 30},
+                    "original_location": "adjacent to vanity",
+                    "area_affected": 3.5,
+                    "removal_completeness": "complete",
+                    "replacement_indication": "definitely_planned"
+                },
+                {
+                    "element_type": "shower_tiles",
+                    "original_material": "ceramic wall tiles",
+                    "removal_evidence": ["exposed_brick", "adhesive_residue", "waterproofing_remnants"],
+                    "confidence_level": 0.9,
+                    "detection_method": "boundary_evidence",
+                    "original_dimensions": {"width": 60, "height": 84},
+                    "original_location": "shower enclosure walls",
+                    "area_affected": 35.0,
+                    "removal_completeness": "complete",
+                    "replacement_indication": "definitely_planned"
+                },
+                {
+                    "element_type": "light_fixture",
+                    "original_material": "wall-mounted vanity light",
+                    "removal_evidence": ["electrical_box", "mounting_holes", "wire_caps"],
+                    "confidence_level": 0.75,
+                    "detection_method": "mounting_evidence",
+                    "original_dimensions": {"width": 24, "height": 6},
+                    "original_location": "above vanity mirror",
+                    "area_affected": 1.0,
+                    "removal_completeness": "complete",
+                    "replacement_indication": "definitely_planned"
+                }
+            ],
+            "inference_summary": {
+                "total_elements_removed": 3,
+                "renovation_scope": "comprehensive_bathroom",
+                "primary_removal_methods": ["professional_demolition"],
+                "estimated_completion": 85
             }
-        ]'''
+        }'''
     
     def calculate_area_from_description(self, description: str, surface_type: str, existing_dimensions: Dict[str, float] = None) -> float:
         """Calculate area from text description using AI"""
@@ -834,6 +1159,7 @@ class AIService:
             logger.error(f"🔍 Error details: {str(e)}")
             return 0.0
 
+
 # OpenAI Service for image analysis
 class OpenAIService:
     def __init__(self):
@@ -850,52 +1176,331 @@ class OpenAIService:
         
         logger.info(f"OpenAIService models configured: {self.models}")
     
-    async def analyze_images_for_demo(self, messages: List[Dict]) -> str:
+
+    # ============================================================================
+    # RAG INTEGRATION METHODS
+    # ============================================================================
+    
+    async def analyze_with_rag(
+        self,
+        prompt: str,
+        context_data: Dict[str, Any] = None,
+        document_type: str = 'demo-scope',
+        rag_enabled: bool = True,
+        confidence_threshold: float = 0.7
+    ) -> Dict[str, Any]:
         """
-        Analyze images for demo scope detection using OpenAI Vision API
+        Enhanced AI analysis with RAG context integration
         """
         try:
-            import openai
+            start_time = time.time()
+            rag_context = []
+            enhanced_prompt = prompt
             
-            if not self.api_key:
-                raise Exception("OpenAI API key not available")
+            # Get RAG context if enabled and available
+            if rag_enabled and RAG_AVAILABLE and context_data:
+                rag_query = self._build_rag_query(context_data)
+                logger.info(f"RAG query: {rag_query}")
+                
+                rag_context = await rag_service.get_rag_context(
+                    query=rag_query,
+                    document_type=document_type,
+                    top_k=5,
+                    similarity_threshold=confidence_threshold
+                )
+                
+                if rag_context:
+                    enhanced_prompt = await rag_service.create_enhanced_prompt(
+                        base_prompt=prompt,
+                        rag_context=rag_context,
+                        include_uncertainty_guidance=True
+                    )
+                    logger.info(f"Enhanced prompt with {len(rag_context)} RAG contexts")
             
-            client = openai.AsyncOpenAI(api_key=self.api_key)
+            # Perform AI analysis
+            if self.mock_mode:
+                result = self._mock_analysis_with_rag(enhanced_prompt, rag_context)
+            else:
+                result = await self._call_ai_with_rag(enhanced_prompt, rag_context)
             
-            response = await client.chat.completions.create(
-                model=self.models['vision'],
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.1
-            )
+            # Add RAG metadata to result
+            result['rag_enhanced'] = len(rag_context) > 0
+            result['rag_context'] = rag_context
+            result['rag_confidence_boost'] = self._calculate_confidence_boost(rag_context)
+            result['processing_time_ms'] = int((time.time() - start_time) * 1000)
             
-            return response.choices[0].message.content
+            return result
             
         except Exception as e:
-            logger.error(f"OpenAI image analysis failed: {str(e)}")
-            # Return a fallback response for development
-            return """
-            {
-                "demolished_areas": [
-                    {
-                        "surface_type": "floor",
-                        "material": "tile",
-                        "description": "Kitchen floor tile removed in main area",
-                        "boundaries": [[100,200], [400,200], [400,500], [100,500]],
-                        "estimated_area_sqft": 45.5,
-                        "confidence": 0.75,
-                        "reference_objects": ["door", "outlet"]
-                    }
-                ],
-                "reference_objects": [
-                    {
-                        "type": "door",
-                        "boundaries": [[50,100], [86,184]],
-                        "estimated_dimensions": {"width_inches": 36, "height_inches": 84}
-                    }
-                ]
+            logger.error(f"RAG-enhanced analysis failed: {e}")
+            # Fallback to regular analysis
+            return await self._fallback_analysis(prompt, context_data)
+    
+    def _build_rag_query(self, context_data: Dict[str, Any]) -> str:
+        """Build RAG search query from context data"""
+        query_parts = []
+        
+        # Room type
+        if context_data.get('room_type'):
+            query_parts.append(f"{context_data['room_type']} demolition")
+        
+        # Materials
+        if context_data.get('materials'):
+            materials = context_data['materials']
+            if isinstance(materials, list):
+                query_parts.append(f"{', '.join(materials)} removal")
+            else:
+                query_parts.append(f"{materials} removal")
+        
+        # Area size for similar scale projects
+        if context_data.get('area_sqft'):
+            area = context_data['area_sqft']
+            if area < 50:
+                query_parts.append("small room")
+            elif area < 150:
+                query_parts.append("medium room")
+            else:
+                query_parts.append("large room")
+        
+        # Analysis type
+        analysis_type = context_data.get('analysis_type', 'demolition analysis')
+        query_parts.append(analysis_type)
+        
+        return ' '.join(query_parts)
+    
+    async def _call_ai_with_rag(self, enhanced_prompt: str, rag_context: List[Dict]) -> Dict[str, Any]:
+        """Call AI service with RAG-enhanced prompt"""
+        try:
+            if self.ai_provider == "openai":
+                return await self._call_openai_with_rag(enhanced_prompt, rag_context)
+            else:
+                return await self._call_generic_ai_with_rag(enhanced_prompt, rag_context)
+                
+        except Exception as e:
+            logger.error(f"AI call with RAG failed: {e}")
+            raise
+    
+    async def _call_openai_with_rag(self, enhanced_prompt: str, rag_context: List[Dict]) -> Dict[str, Any]:
+        """OpenAI-specific RAG-enhanced analysis"""
+        try:
+            response = await self.llm.ainvoke(enhanced_prompt)
+            
+            # Parse response
+            parsed_result = self._parse_json_response(response.content)
+            
+            # Add RAG insights
+            if rag_context:
+                parsed_result['rag_insights'] = {
+                    'similar_cases_found': len(rag_context),
+                    'applied_corrections': self._extract_applied_corrections(rag_context),
+                    'confidence_factors': self._extract_confidence_factors(rag_context)
+                }
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.error(f"OpenAI RAG analysis failed: {e}")
+            raise
+    
+    async def _call_generic_ai_with_rag(self, enhanced_prompt: str, rag_context: List[Dict]) -> Dict[str, Any]:
+        """Generic AI provider RAG-enhanced analysis"""
+        try:
+            response = self.llm.invoke(enhanced_prompt)
+            parsed_result = self._parse_json_response(response)
+            
+            # Add RAG metadata
+            if rag_context:
+                parsed_result['rag_insights'] = {
+                    'similar_cases_found': len(rag_context),
+                    'confidence_boost': self._calculate_confidence_boost(rag_context)
+                }
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.error(f"Generic AI RAG analysis failed: {e}")
+            raise
+    
+    def _mock_analysis_with_rag(self, enhanced_prompt: str, rag_context: List[Dict]) -> Dict[str, Any]:
+        """Mock analysis for development/testing"""
+        mock_result = {
+            "demolished_areas": [
+                {
+                    "type": "floor",
+                    "material": "ceramic tile",
+                    "area_sqft": 45.5,
+                    "confidence": 0.85,
+                    "description": "Complete tile floor removal",
+                    "estimated": False,
+                    "detection_method": "rag_enhanced"
+                }
+            ],
+            "total_demolished_sqft": 45.5,
+            "confidence_score": 0.85,
+            "ai_raw_response": "Mock RAG-enhanced analysis response",
+            "model_version": "mock-rag-v1.0"
+        }
+        
+        # Add RAG insights if context available
+        if rag_context:
+            mock_result['rag_insights'] = {
+                'similar_cases_found': len(rag_context),
+                'applied_corrections': ['material_identification', 'area_estimation'],
+                'confidence_boost': 0.15
             }
-            """
+        
+        return mock_result
+    
+    def _extract_applied_corrections(self, rag_context: List[Dict]) -> List[str]:
+        """Extract types of corrections applied from RAG context"""
+        corrections = set()
+        
+        for context in rag_context:
+            insights = context.get('applied_insights', [])
+            for insight in insights:
+                if 'material' in insight:
+                    corrections.add('material_identification')
+                if 'area' in insight:
+                    corrections.add('area_estimation')
+                if 'confidence' in insight:
+                    corrections.add('confidence_calibration')
+                if 'room' in insight:
+                    corrections.add('room_context')
+        
+        return list(corrections)
+    
+    def _extract_confidence_factors(self, rag_context: List[Dict]) -> List[str]:
+        """Extract confidence factors from RAG context"""
+        factors = []
+        
+        avg_similarity = sum(ctx['similarity_score'] for ctx in rag_context) / len(rag_context)
+        if avg_similarity > 0.8:
+            factors.append('high_similarity_cases')
+        elif avg_similarity > 0.6:
+            factors.append('moderate_similarity_cases')
+        else:
+            factors.append('low_similarity_cases')
+        
+        case_count = len(rag_context)
+        if case_count >= 3:
+            factors.append('multiple_references')
+        elif case_count >= 1:
+            factors.append('single_reference')
+        
+        return factors
+    
+    def _calculate_confidence_boost(self, rag_context: List[Dict]) -> float:
+        """Calculate confidence boost from RAG context"""
+        if not rag_context:
+            return 0.0
+        
+        # Base boost from having context
+        base_boost = 0.05
+        
+        # Additional boost based on similarity scores
+        avg_similarity = sum(ctx['similarity_score'] for ctx in rag_context) / len(rag_context)
+        similarity_boost = avg_similarity * 0.1
+        
+        # Boost based on number of similar cases
+        count_boost = min(len(rag_context) * 0.02, 0.1)
+        
+        total_boost = base_boost + similarity_boost + count_boost
+        return min(total_boost, 0.25)  # Cap at 25% boost
+    
+    async def _fallback_analysis(self, prompt: str, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Fallback to regular analysis if RAG fails"""
+        try:
+            logger.warning("Using fallback analysis due to RAG failure")
+            
+            if self.mock_mode:
+                return self._mock_analysis_with_rag(prompt, [])
+            else:
+                response = self.llm.invoke(prompt) if self.llm else "Mock response"
+                return self._parse_json_response(str(response))
+                
+        except Exception as e:
+            logger.error(f"Fallback analysis failed: {e}")
+            return {
+                "error": "Analysis failed",
+                "demolished_areas": [],
+                "confidence_score": 0.0,
+                "rag_enhanced": False
+            }
+    
+    async def analyze_before_after_comparison(
+        self,
+        before_features: Dict[str, Any],
+        after_features: Dict[str, Any],
+        room_context: Dict[str, Any],
+        rag_enabled: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Analyze before/after images with RAG enhancement
+        """
+        try:
+            # Build comparison prompt
+            comparison_prompt = self._build_comparison_prompt(
+                before_features, after_features, room_context
+            )
+            
+            # Prepare context data for RAG
+            context_data = {
+                'analysis_type': 'before_after_comparison',
+                'room_type': room_context.get('room_type', 'unknown'),
+                'materials': before_features.get('materials', []),
+                'area_sqft': room_context.get('dimensions', {}).get('floor_area_sqft', 0)
+            }
+            
+            # Perform RAG-enhanced analysis
+            result = await self.analyze_with_rag(
+                prompt=comparison_prompt,
+                context_data=context_data,
+                document_type='demo-scope',
+                rag_enabled=rag_enabled
+            )
+            
+            # Add comparison-specific metadata
+            result['analysis_type'] = 'before_after_comparison'
+            result['before_features'] = before_features
+            result['after_features'] = after_features
+            result['comparison_method'] = 'ai_feature_analysis'
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Before/after comparison failed: {e}")
+            raise
+    
+    def _build_comparison_prompt(
+        self,
+        before_features: Dict[str, Any],
+        after_features: Dict[str, Any], 
+        room_context: Dict[str, Any]
+    ) -> str:
+        """Build prompt for before/after comparison analysis with multi-angle support"""
+        
+        # Build room context string
+        room_type = room_context.get('room_type', 'Unknown')
+        dimensions = room_context.get('dimensions', {})
+        
+        room_context_str = f"""이 방은 {room_type} 타입입니다. 
+치수 정보: {dimensions}
+전후 사진들은 동일한 방을 여러 각도에서 촬영한 것입니다.
+
+철거 전 특징:
+{json.dumps(before_features, indent=2, ensure_ascii=False)}
+
+철거 후 특징:
+{json.dumps(after_features, indent=2, ensure_ascii=False)}
+
+"""
+        
+        # Use the new multi-angle comparison prompt template
+        formatted_prompt = BEFORE_AFTER_COMPARISON_PROMPT.format(
+            room_context=room_context_str
+        )
+        
+        return formatted_prompt
 
 # Global AI service instance
 ai_service = AIService()

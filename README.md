@@ -14,11 +14,29 @@ MJ The Estimator is a comprehensive construction estimation platform that combin
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.10+ (Recommended: Anaconda or Miniconda)
 - Node.js 16+
 - OpenAI API Key (recommended) or Ollama (local development)
 
 ### Installation & Setup
+
+#### Conda Environment Setup (Recommended for Backend)
+```bash
+# Create conda environment with Python 3.11
+conda create -n mj-estimator python=3.11
+
+# Always use conda environment for backend operations
+conda run -n mj-estimator pip install -r backend/requirements.txt
+conda run -n mj-estimator python backend/main.py
+
+# Or activate the environment first (Windows)
+conda activate mj-estimator
+pip install -r backend/requirements.txt
+python backend/main.py
+conda deactivate
+
+# Note: Direct pip install without conda may cause dependency conflicts!
+```
 
 #### Option 1: Using npm scripts (Recommended)
 ```bash
@@ -48,18 +66,23 @@ scripts\dev-stop.bat
 
 #### Option 3: Manual setup
 ```bash
-# Backend setup
+# Backend setup with Conda (Recommended)
 cd backend
-python -m venv venv
-call venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
+conda create -n mj-estimator python=3.11
+conda run -n mj-estimator pip install -r requirements.txt
 
 # Create database
-python -c "from models.database import init_database; init_database()"
+conda run -n mj-estimator python -c "from models.database import init_database; init_database()"
 
 # Start backend
-uvicorn main:app --reload --port 8001
+conda run -n mj-estimator uvicorn main:app --reload --port 8001
+
+# Alternative: Traditional venv (may have dependency conflicts)
+# python -m venv venv
+# call venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+# pip install -r requirements.txt
+# uvicorn main:app --reload --port 8001
 
 # Frontend setup (new terminal)
 cd frontend
@@ -140,6 +163,9 @@ GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
 - **Claude 3**: Alternative LLM provider
 - **Ollama**: Local LLM for development (optional)
 - **Custom Prompts**: Centralized prompt management system
+- **RAG (Retrieval-Augmented Generation)**: Enhanced AI accuracy with historical data
+- **Sentence Transformers**: Text embeddings for semantic search
+- **FAISS**: Vector database for similarity search
 
 ## 📁 Project Structure
 
@@ -201,9 +227,9 @@ Both frontend and backend support hot reloading:
 ## 🧪 Testing
 
 ```bash
-# Backend tests
+# Backend tests (with conda environment)
 cd backend
-python -m pytest
+conda run -n mj-estimator python -m pytest
 
 # Frontend tests
 cd frontend
@@ -252,6 +278,8 @@ All AI prompts are centralized in `backend/utils/prompts.py`:
 2. **Frontend build errors**: Ensure Node.js 16+ and clear npm cache
 3. **AI analysis fails**: Verify API keys and environment variables
 4. **Database errors**: Run database initialization script
+5. **Dependency conflicts**: Use conda environment (`mj-estimator`) to avoid conflicts
+6. **RAG service errors**: Ensure sentence-transformers is installed in conda environment
 
 ### Debug Mode
 Enable debug logging by setting:
@@ -262,6 +290,34 @@ LOG_LEVEL=DEBUG
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🐍 Python Environment Management
+
+### Why Use Conda?
+This project uses a Conda environment to manage Python dependencies:
+- **Avoids conflicts** between system Python and project dependencies
+- **Ensures compatibility** with packages like numpy, scipy, and sentence-transformers
+- **Consistent environment** across different development machines
+
+### Key Commands
+```bash
+# Installing packages
+conda run -n mj-estimator pip install <package-name>
+
+# Running scripts
+conda run -n mj-estimator python script.py
+
+# Starting server
+conda run -n mj-estimator uvicorn main:app --reload --port 8001
+
+# Checking installed packages
+conda run -n mj-estimator pip list
+```
+
+### Important Notes
+- **Never use** plain `pip install` without conda - it may install to wrong environment
+- **Always prefix** backend commands with `conda run -n mj-estimator`
+- **Alternative**: Activate environment first with `conda activate mj-estimator`
 
 ## 🔮 Roadmap
 

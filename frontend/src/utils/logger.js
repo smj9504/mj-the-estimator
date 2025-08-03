@@ -198,8 +198,8 @@ class Logger {
 
 // Create and export singleton instance
 const logger = new Logger({
-  enableConsole: process.env.NODE_ENV !== 'production',
-  logLevel: process.env.NODE_ENV === 'production' ? 'warn' : 'debug'
+  enableConsole: import.meta.env.MODE !== 'production',
+  logLevel: import.meta.env.MODE === 'production' ? 'warn' : 'debug'
 });
 
 // Global error handler
