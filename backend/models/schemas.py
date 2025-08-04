@@ -68,6 +68,7 @@ class PreEstimateSessionResponse(BaseModel):
     jobsite: Optional[str] = None
     occupancy: Optional[str] = None
     company: Optional[CompanyInfo] = None
+    kitchen_cabinetry_enabled: Optional[bool] = False
 
 class CompletePreEstimateResponse(BaseModel):
     session_id: str

@@ -29,25 +29,8 @@ const KitchenCabinetry = React.memo(() => {
       islandDimensions: '',
       configuration: ''
     },
-    baseCabinets: {
-      cabinet12: 0,
-      cabinet15: 0,
-      cabinet18: 0,
-      cabinet21: 0,
-      cabinet24: 0,
-      cabinet30: 0,
-      cabinet36: 0,
-      customSizes: []
-    },
-    wallCabinets: {
-      cabinet12: 0,
-      cabinet15: 0,
-      cabinet18: 0,
-      cabinet24: 0,
-      cabinet30: 0,
-      cabinet36: 0,
-      customSizes: []
-    },
+    baseCabinets: [],
+    wallCabinets: [],
     specialtyCabinets: {
       sinkBase: { count: 0, width: '' },
       cornerBase: 0,
@@ -58,8 +41,7 @@ const KitchenCabinetry = React.memo(() => {
     },
     linearMeasurements: {
       totalBaseLF: 0,
-      totalWallLF: 0,
-      islandLF: 0
+      totalWallLF: 0
     },
     specifications: {
       doorStyle: '',
@@ -118,6 +100,42 @@ const KitchenCabinetry = React.memo(() => {
     }
   }, [sessionId]);
 
+  // Auto-calculate linear measurements based on cabinet counts
+  useEffect(() => {
+    // Calculate total base cabinet linear feet
+    let totalBaseLF = 0;
+    if (kitchenData?.baseCabinets && Array.isArray(kitchenData.baseCabinets)) {
+      kitchenData.baseCabinets.forEach(cabinet => {
+        if (cabinet.width && cabinet.count) {
+          totalBaseLF += (parseFloat(cabinet.width) / 12) * parseInt(cabinet.count); // Convert inches to feet
+        }
+      });
+    }
+    
+    // Calculate total wall cabinet linear feet
+    let totalWallLF = 0;
+    if (kitchenData?.wallCabinets && Array.isArray(kitchenData.wallCabinets)) {
+      kitchenData.wallCabinets.forEach(cabinet => {
+        if (cabinet.width && cabinet.count) {
+          totalWallLF += (parseFloat(cabinet.width) / 12) * parseInt(cabinet.count); // Convert inches to feet
+        }
+      });
+    }
+    
+    // Update linear measurements if they've changed
+    if (totalBaseLF !== kitchenData?.linearMeasurements?.totalBaseLF || 
+        totalWallLF !== kitchenData?.linearMeasurements?.totalWallLF) {
+      setKitchenData(prev => ({
+        ...prev,
+        linearMeasurements: {
+          ...prev.linearMeasurements,
+          totalBaseLF: Math.round(totalBaseLF * 10) / 10, // Round to 1 decimal place
+          totalWallLF: Math.round(totalWallLF * 10) / 10  // Round to 1 decimal place
+        }
+      }));
+    }
+  }, [kitchenData?.baseCabinets, kitchenData?.wallCabinets]);
+
   // Auto-save when kitchenData changes
   useEffect(() => {
     if (sessionId && Object.keys(kitchenData).length > 0) {
@@ -146,12 +164,56 @@ const KitchenCabinetry = React.memo(() => {
     initializeData();
   }, [sessionId]);
 
+  // Get kitchen dimensions from measurement data
+  const getKitchenDimensions = useCallback(async () => {
+    try {
+      const response = await fetch(`http://localhost:8001/api/pre-estimate/measurement/data/${sessionId}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const measurementData = data.data;
+        
+        // Find kitchen room in the measurement data
+        for (const location of measurementData) {
+          const kitchenRoom = location.rooms?.find(room => 
+            room.name?.toLowerCase().includes('kitchen')
+          );
+          
+          if (kitchenRoom) {
+            const rawDims = kitchenRoom.raw_dimensions;
+            const measurements = kitchenRoom.measurements;
+            
+            // Format dimensions for prefilling
+            const dimensions = `${rawDims.length || 0}' x ${rawDims.width || 0}'`;
+            const area = measurements?.floor_area_sqft || rawDims.area || 0;
+            
+            return {
+              dimensions,
+              area,
+              length: rawDims.length || 0,
+              width: rawDims.width || 0,
+              height: rawDims.height || 8
+            };
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to get kitchen dimensions:', error);
+    }
+    
+    return null;
+  }, [sessionId]);
+
   const loadExistingData = useCallback(async () => {
     try {
       const savedData = await autoSaveAPI.getKitchenCabinetry(sessionId);
+      let hasExistingDimensions = false;
+      
       if (savedData.success && savedData.data) {
         if (savedData.data.kitchenData) {
           setKitchenData(savedData.data.kitchenData);
+          // Check if dimensions already exist
+          hasExistingDimensions = savedData.data.kitchenData?.layout?.dimensions ? true : false;
         }
         if (savedData.data.uploadedImages) {
           setUploadedImages(savedData.data.uploadedImages);
@@ -160,10 +222,24 @@ const KitchenCabinetry = React.memo(() => {
           setAnalysisResults(savedData.data.analysisResults);
         }
       }
+      
+      // If dimensions are not already filled, try to prefill from measurement data
+      if (!hasExistingDimensions) {
+        const kitchenDims = await getKitchenDimensions();
+        if (kitchenDims) {
+          setKitchenData(prev => ({
+            ...prev,
+            layout: {
+              ...prev.layout,
+              dimensions: kitchenDims.dimensions
+            }
+          }));
+        }
+      }
     } catch (error) {
       console.error('Failed to load existing kitchen cabinetry data:', error);
     }
-  }, [sessionId]);
+  }, [sessionId, getKitchenDimensions]);
 
   // Image upload handlers
   const handleDragEnter = useCallback((e) => {
@@ -268,6 +344,38 @@ const KitchenCabinetry = React.memo(() => {
       setIsAnalyzing(false);
     }
   }, [uploadedImages, sessionId]);
+
+  // Cabinet management handlers
+  const addCabinet = useCallback((type) => {
+    const newCabinet = {
+      id: `${type}_${Date.now()}`,
+      width: '',
+      count: 0
+    };
+    
+    setKitchenData(prev => ({
+      ...prev,
+      [type]: [...(prev[type] || []), newCabinet]
+    }));
+  }, []);
+
+  const removeCabinet = useCallback((type, id) => {
+    setKitchenData(prev => ({
+      ...prev,
+      [type]: prev[type].filter(cabinet => cabinet.id !== id)
+    }));
+  }, []);
+
+  const updateCabinet = useCallback((type, id, field, value) => {
+    setKitchenData(prev => ({
+      ...prev,
+      [type]: prev[type].map(cabinet => 
+        cabinet.id === id 
+          ? { ...cabinet, [field]: value }
+          : cabinet
+      )
+    }));
+  }, []);
 
   // Form update handlers
   const updateKitchenData = useCallback((section, field, value) => {
@@ -532,12 +640,12 @@ const KitchenCabinetry = React.memo(() => {
                   />
                   <label htmlFor="hasIsland" className="text-sm font-medium text-gray-700">Has Island/Peninsula</label>
                 </div>
-                {kitchenData.layout.hasIsland && (
+                {kitchenData?.layout?.hasIsland && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Island/Peninsula Dimensions</label>
                     <input
                       type="text"
-                      value={kitchenData.layout.islandDimensions}
+                      value={kitchenData?.layout?.islandDimensions || ''}
                       onChange={(e) => updateKitchenData('layout', 'islandDimensions', e.target.value)}
                       className="w-full p-2 border border-gray-300 rounded-md"
                       placeholder="e.g., 6' x 3'"
@@ -549,81 +657,144 @@ const KitchenCabinetry = React.memo(() => {
 
             {/* Base Cabinets */}
             <div className="mb-8">
-              <h4 className="text-md font-medium text-gray-900 mb-4">Base Cabinets</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Object.entries(kitchenData.baseCabinets).filter(([key]) => key !== 'customSizes').map(([key, value]) => (
-                  <div key={key}>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      {key.replace('cabinet', '')}″ Base
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={value}
-                      onChange={(e) => updateKitchenData('baseCabinets', key, parseInt(e.target.value) || 0)}
-                      className="w-full p-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                ))}
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-md font-medium text-gray-900">Base Cabinets</h4>
+                <button
+                  type="button"
+                  onClick={() => addCabinet('baseCabinets')}
+                  className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                >
+                  + Add Cabinet
+                </button>
               </div>
+              
+              {kitchenData?.baseCabinets?.length === 0 ? (
+                <p className="text-gray-500 text-sm italic">No base cabinets added. Click "Add Cabinet" to start.</p>
+              ) : (
+                <div className="space-y-3">
+                  {kitchenData?.baseCabinets?.map((cabinet) => (
+                    <div key={cabinet.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Width (inches)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="e.g., 24"
+                          value={cabinet.width}
+                          onChange={(e) => updateCabinet('baseCabinets', cabinet.id, 'width', e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Count</label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={cabinet.count}
+                          onChange={(e) => updateCabinet('baseCabinets', cabinet.id, 'count', e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeCabinet('baseCabinets', cabinet.id)}
+                        className="mt-6 p-2 text-red-600 hover:text-red-800 transition-colors"
+                        title="Remove cabinet"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Wall Cabinets */}
             <div className="mb-8">
-              <h4 className="text-md font-medium text-gray-900 mb-4">Wall Cabinets</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Object.entries(kitchenData.wallCabinets).filter(([key]) => key !== 'customSizes').map(([key, value]) => (
-                  <div key={key}>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      {key.replace('cabinet', '')}″ Wall
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={value}
-                      onChange={(e) => updateKitchenData('wallCabinets', key, parseInt(e.target.value) || 0)}
-                      className="w-full p-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                ))}
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-md font-medium text-gray-900">Wall Cabinets</h4>
+                <button
+                  type="button"
+                  onClick={() => addCabinet('wallCabinets')}
+                  className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                >
+                  + Add Cabinet
+                </button>
               </div>
+              
+              {kitchenData?.wallCabinets?.length === 0 ? (
+                <p className="text-gray-500 text-sm italic">No wall cabinets added. Click "Add Cabinet" to start.</p>
+              ) : (
+                <div className="space-y-3">
+                  {kitchenData?.wallCabinets?.map((cabinet) => (
+                    <div key={cabinet.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Width (inches)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="e.g., 30"
+                          value={cabinet.width}
+                          onChange={(e) => updateCabinet('wallCabinets', cabinet.id, 'width', e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Count</label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={cabinet.count}
+                          onChange={(e) => updateCabinet('wallCabinets', cabinet.id, 'count', e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeCabinet('wallCabinets', cabinet.id)}
+                        className="mt-6 p-2 text-red-600 hover:text-red-800 transition-colors"
+                        title="Remove cabinet"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Linear Measurements */}
             <div className="mb-8">
               <h4 className="text-md font-medium text-gray-900 mb-4">Linear Measurements</h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Total Base Cabinet LF</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Total Base Cabinet LF (Auto-calculated)</label>
                   <input
                     type="number"
                     min="0"
                     step="0.1"
-                    value={kitchenData.linearMeasurements.totalBaseLF}
-                    onChange={(e) => updateKitchenData('linearMeasurements', 'totalBaseLF', parseFloat(e.target.value) || 0)}
-                    className="w-full p-2 border border-gray-300 rounded-md"
+                    value={kitchenData?.linearMeasurements?.totalBaseLF || 0}
+                    readOnly
+                    className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Total Wall Cabinet LF</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Total Wall Cabinet LF (Auto-calculated)</label>
                   <input
                     type="number"
                     min="0"
                     step="0.1"
-                    value={kitchenData.linearMeasurements.totalWallLF}
-                    onChange={(e) => updateKitchenData('linearMeasurements', 'totalWallLF', parseFloat(e.target.value) || 0)}
-                    className="w-full p-2 border border-gray-300 rounded-md"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Island/Peninsula LF</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={kitchenData.linearMeasurements.islandLF}
-                    onChange={(e) => updateKitchenData('linearMeasurements', 'islandLF', parseFloat(e.target.value) || 0)}
-                    className="w-full p-2 border border-gray-300 rounded-md"
+                    value={kitchenData?.linearMeasurements?.totalWallLF || 0}
+                    readOnly
+                    className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
                   />
                 </div>
               </div>
@@ -637,7 +808,7 @@ const KitchenCabinetry = React.memo(() => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Door Style</label>
                   <input
                     type="text"
-                    value={kitchenData.specifications.doorStyle}
+                    value={kitchenData?.specifications?.doorStyle || ''}
                     onChange={(e) => updateKitchenData('specifications', 'doorStyle', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                     placeholder="e.g., Shaker, Raised Panel"
@@ -647,7 +818,7 @@ const KitchenCabinetry = React.memo(() => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Material Type</label>
                   <input
                     type="text"
-                    value={kitchenData.specifications.materialType}
+                    value={kitchenData?.specifications?.materialType || ''}
                     onChange={(e) => updateKitchenData('specifications', 'materialType', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                     placeholder="e.g., Solid Wood, MDF"
@@ -657,7 +828,7 @@ const KitchenCabinetry = React.memo(() => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Finish</label>
                   <input
                     type="text"
-                    value={kitchenData.specifications.finish}
+                    value={kitchenData?.specifications?.finish || ''}
                     onChange={(e) => updateKitchenData('specifications', 'finish', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                     placeholder="e.g., Painted White, Natural Stain"
@@ -666,7 +837,7 @@ const KitchenCabinetry = React.memo(() => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Quality Tier</label>
                   <select
-                    value={kitchenData.specifications.qualityTier}
+                    value={kitchenData?.specifications?.qualityTier || ''}
                     onChange={(e) => updateKitchenData('specifications', 'qualityTier', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                   >
@@ -684,8 +855,8 @@ const KitchenCabinetry = React.memo(() => {
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">Additional Notes</label>
               <textarea
-                value={kitchenData.notes}
-                onChange={(e) => updateKitchenData('', 'notes', e.target.value)}
+                value={kitchenData?.notes || ''}
+                onChange={(e) => setKitchenData(prev => ({ ...prev, notes: e.target.value }))}
                 className="w-full p-2 border border-gray-300 rounded-md"
                 rows="4"
                 placeholder="Any additional observations, special requirements, or notes about the kitchen cabinetry..."

@@ -612,6 +612,21 @@ const MeasurementData = () => {
     setEditableData(newData);
   };
 
+  const deleteRoom = (locationIndex, roomIndex) => {
+    const newData = JSON.parse(JSON.stringify(editableData));
+    const location = newData[locationIndex];
+    
+    if (location && location.rooms[roomIndex]) {
+      const roomName = location.rooms[roomIndex].name;
+      if (confirm(`Are you sure you want to delete "${roomName}"? This action cannot be undone.`)) {
+        // Remove the room from the array
+        location.rooms.splice(roomIndex, 1);
+        setEditableData(newData);
+        console.log(`Deleted room: ${roomName}`);
+      }
+    }
+  };
+
   const mergeRooms = (locationIndex, roomIndex1, roomIndex2) => {
     const newData = JSON.parse(JSON.stringify(editableData));
     const location = newData[locationIndex];
@@ -1959,6 +1974,13 @@ const MeasurementData = () => {
                                           🔄 Merge Duplicates
                                         </button>
                                       )}
+                                      <button
+                                        onClick={() => deleteRoom(locationIndex, roomIndex)}
+                                        className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded hover:bg-red-200"
+                                        title="Delete this room"
+                                      >
+                                        🗑️ Delete
+                                      </button>
                                       {room.room_classification?.is_sub_area && !hasDuplicate && (
                                         <button
                                           onClick={() => {

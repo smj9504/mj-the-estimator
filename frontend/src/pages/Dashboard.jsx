@@ -15,11 +15,36 @@ const Dashboard = () => {
   const [estimates, setEstimates] = useState([]);
   const [showKitchenCabinetry, setShowKitchenCabinetry] = useState(false);
 
-  // Load Kitchen Cabinetry visibility state
+  // Load Kitchen Cabinetry visibility state from DB
   useEffect(() => {
-    const kitchenCabinetryEnabled = sessionStorage.getItem(`kitchenCabinetryEnabled_${sessionId}`);
-    if (kitchenCabinetryEnabled === 'true') {
-      setShowKitchenCabinetry(true);
+    const loadKitchenCabinetryStatus = async () => {
+      try {
+        const response = await fetch(`http://localhost:8001/api/pre-estimate/session/${sessionId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.kitchen_cabinetry_enabled !== undefined) {
+            setShowKitchenCabinetry(data.kitchen_cabinetry_enabled);
+            sessionStorage.setItem(`kitchenCabinetryEnabled_${sessionId}`, data.kitchen_cabinetry_enabled.toString());
+          }
+        } else {
+          // Fallback to sessionStorage
+          const kitchenCabinetryEnabled = sessionStorage.getItem(`kitchenCabinetryEnabled_${sessionId}`);
+          if (kitchenCabinetryEnabled === 'true') {
+            setShowKitchenCabinetry(true);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading kitchen cabinetry status:', error);
+        // Fallback to sessionStorage
+        const kitchenCabinetryEnabled = sessionStorage.getItem(`kitchenCabinetryEnabled_${sessionId}`);
+        if (kitchenCabinetryEnabled === 'true') {
+          setShowKitchenCabinetry(true);
+        }
+      }
+    };
+    
+    if (sessionId) {
+      loadKitchenCabinetryStatus();
     }
   }, [sessionId]);
 
@@ -638,10 +663,22 @@ const Dashboard = () => {
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-medium text-gray-700">옵션</span>
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               const newState = !showKitchenCabinetry;
                               setShowKitchenCabinetry(newState);
                               sessionStorage.setItem(`kitchenCabinetryEnabled_${sessionId}`, newState.toString());
+                              
+                              // Update in database
+                              try {
+                                const response = await fetch(`http://localhost:8001/api/pre-estimate/sessions/${sessionId}/kitchen-cabinetry-status?enabled=${newState}`, {
+                                  method: 'PUT'
+                                });
+                                if (!response.ok) {
+                                  console.error('Failed to update kitchen cabinetry status in database');
+                                }
+                              } catch (error) {
+                                console.error('Error updating kitchen cabinetry status:', error);
+                              }
                             }}
                             className={`px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                               showKitchenCabinetry

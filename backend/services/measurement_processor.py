@@ -368,6 +368,16 @@ class CSVTableProcessor(BaseProcessor):
         """Check if this is clearly not a room (summary data, etc.)"""
         room_name_lower = room_name.lower()
         
+        # Skip floor labels when they appear as data rows (not room names)
+        floor_patterns = [
+            r'^1st\s+floor$',
+            r'^2nd\s+floor$',
+            r'^3rd\s+floor$',
+            r'^4th\s+floor$',
+            r'^5th\s+floor$',
+            r'^\d+(st|nd|rd|th)\s+floor$'
+        ]
+        
         # Skip summary/aggregate data that's not actual rooms
         summary_patterns = [
             r'^above\s+grade.*area$',
@@ -385,6 +395,11 @@ class CSVTableProcessor(BaseProcessor):
             r'^wall\s+attributes$',
             r'^floor\s+attributes$'
         ]
+        
+        # Check floor patterns first
+        for pattern in floor_patterns:
+            if re.search(pattern, room_name_lower):
+                return True
         
         # Check if this is summary data to skip
         for pattern in summary_patterns:

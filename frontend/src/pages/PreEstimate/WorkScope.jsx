@@ -86,7 +86,7 @@ const WorkScope = () => {
   useEffect(() => {
     if (sessionId) {
       // Check kitchen cabinetry status
-      const kitchenEnabled = sessionStorage.getItem('kitchenCabinetryEnabled');
+      const kitchenEnabled = sessionStorage.getItem(`kitchenCabinetryEnabled_${sessionId}`);
       setKitchenCabinetryEnabled(kitchenEnabled === 'true');
       
       // Load measurement data
@@ -349,10 +349,25 @@ const WorkScope = () => {
     }
   };
 
-  const handleKitchenDialogResponse = (includeKitchen) => {
+  const handleKitchenDialogResponse = async (includeKitchen) => {
     setShowKitchenDialog(false);
     
     if (includeKitchen) {
+      // Save kitchen cabinetry enabled status
+      sessionStorage.setItem(`kitchenCabinetryEnabled_${sessionId}`, 'true');
+      
+      // Update in database
+      try {
+        const response = await fetch(`http://localhost:8001/api/pre-estimate/sessions/${sessionId}/kitchen-cabinetry-status?enabled=true`, {
+          method: 'PUT'
+        });
+        if (!response.ok) {
+          console.error('Failed to update kitchen cabinetry status in database');
+        }
+      } catch (error) {
+        console.error('Error updating kitchen cabinetry status:', error);
+      }
+      
       // Navigate to Kitchen Cabinetry page
       navigate(`/pre-estimate/kitchen-cabinetry?session=${sessionId}`);
     } else {

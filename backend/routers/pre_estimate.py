@@ -89,7 +89,8 @@ async def create_session(request: Optional[CreateProjectRequest] = None):
             project_name=session['project_name'] if session['project_name'] is not None else None,
             jobsite=session['jobsite_full_address'] if session['jobsite_full_address'] is not None else None,
             occupancy=session['occupancy'] if session['occupancy'] is not None else None,
-            company=company
+            company=company,
+            kitchen_cabinetry_enabled=bool(session['kitchen_cabinetry_enabled'] if 'kitchen_cabinetry_enabled' in session.keys() else 0)
         )
         
     except Exception as e:
@@ -143,7 +144,8 @@ async def get_session(session_id: str):
             project_name=session_dict['project_name'] if session_dict['project_name'] is not None else None,
             jobsite=jobsite_value,
             occupancy=session_dict.get('occupancy'),
-            company=company
+            company=company,
+            kitchen_cabinetry_enabled=bool(session_dict['kitchen_cabinetry_enabled'] if 'kitchen_cabinetry_enabled' in session_dict.keys() else 0)
         )
         
     except HTTPException:
@@ -561,7 +563,8 @@ async def get_all_projects():
                 project_name=project_dict['project_name'] if project_dict['project_name'] is not None else None,
                 jobsite=jobsite_value,
                 occupancy=project_dict.get('occupancy'),
-                company=company
+                company=company,
+                kitchen_cabinetry_enabled=bool(project_dict['kitchen_cabinetry_enabled'] if 'kitchen_cabinetry_enabled' in project_dict.keys() else 0)
             ))
         
         return ProjectListResponse(projects=project_list)
@@ -646,7 +649,8 @@ async def update_project(session_id: str, request: ProjectUpdateRequest):
             project_name=updated_project['project_name'],
             jobsite=updated_project.get('jobsite'),
             occupancy=updated_project.get('occupancy'),
-            company=company
+            company=company,
+            kitchen_cabinetry_enabled=bool(updated_project['kitchen_cabinetry_enabled'] if 'kitchen_cabinetry_enabled' in updated_project.keys() else 0)
         )
         
     except HTTPException:
@@ -884,6 +888,31 @@ async def get_saved_material_scope(session_id: str):
     except Exception as e:
         logger.error(f"Error getting saved material scope: {e}")
         raise HTTPException(status_code=500, detail="Failed to get saved material scope")
+
+@router.put("/sessions/{session_id}/kitchen-cabinetry-status")
+async def update_kitchen_cabinetry_status(session_id: str, enabled: bool):
+    """Update kitchen cabinetry enabled status"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Update kitchen cabinetry enabled status
+        execute_update(
+            "UPDATE pre_estimate_sessions SET kitchen_cabinetry_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+            (1 if enabled else 0, session_id)
+        )
+        
+        return {"success": True, "message": "Kitchen cabinetry status updated", "enabled": enabled}
+        
+    except Exception as e:
+        logger.error(f"Error updating kitchen cabinetry status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update kitchen cabinetry status")
 
 @router.put("/auto-save/progress/{session_id}")
 async def auto_save_progress(session_id: str, data: dict):

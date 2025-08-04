@@ -161,6 +161,13 @@ def init_database():
             # Columns might already exist, continue
             pass
         
+        # Check if kitchen_cabinetry_enabled column exists
+        try:
+            cursor.execute("SELECT kitchen_cabinetry_enabled FROM pre_estimate_sessions LIMIT 0")
+        except sqlite3.OperationalError:
+            # Column doesn't exist, add it
+            cursor.execute("ALTER TABLE pre_estimate_sessions ADD COLUMN kitchen_cabinetry_enabled BOOLEAN DEFAULT 0")
+        
         # Insert default prompts if not exists
         cursor.execute("INSERT OR IGNORE INTO prompts (step, template) VALUES (?, ?)",
                       ("work_scope", "작업 범위: {scope}\n주요 작업 항목을 나열하고 간단히 설명해:"))
