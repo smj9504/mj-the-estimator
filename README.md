@@ -14,7 +14,7 @@ MJ The Estimator is a comprehensive construction estimation platform that combin
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.10+ (Recommended: Anaconda or Miniconda)
+- Python 3.10+ (tested with Python 3.13)
 - Node.js 16+
 - OpenAI API Key (recommended) or Ollama (local development)
 
@@ -22,8 +22,10 @@ MJ The Estimator is a comprehensive construction estimation platform that combin
 
 #### Conda Environment Setup (Recommended for Backend)
 ```bash
-# Create conda environment with Python 3.11
+# Create conda environment (or use current Python version)
 conda create -n mj-estimator python=3.11
+# Or for other Python versions:
+# conda create -n mj-estimator python=3.13
 
 # Always use conda environment for backend operations
 conda run -n mj-estimator pip install -r backend/requirements.txt
@@ -68,7 +70,7 @@ scripts\dev-stop.bat
 ```bash
 # Backend setup with Conda (Recommended)
 cd backend
-conda create -n mj-estimator python=3.11
+conda create -n mj-estimator python=3.11  # or python=3.13
 conda run -n mj-estimator pip install -r requirements.txt
 
 # Create database
@@ -77,10 +79,11 @@ conda run -n mj-estimator python -c "from models.database import init_database; 
 # Start backend
 conda run -n mj-estimator uvicorn main:app --reload --port 8001
 
-# Alternative: Traditional venv (may have dependency conflicts)
-# python -m venv venv
-# call venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
+# Alternative: Traditional venv (works with Python 3.13)
+# cd backend
+# python -m venv mj-estimator
+# call mj-estimator\Scripts\activate  # Windows
+# source mj-estimator/bin/activate  # Linux/Mac
 # pip install -r requirements.txt
 # uvicorn main:app --reload --port 8001
 
@@ -274,12 +277,13 @@ All AI prompts are centralized in `backend/utils/prompts.py`:
 ## 🆘 Troubleshooting
 
 ### Common Issues
-1. **Backend fails to start**: Check Python version and virtual environment
+1. **Backend fails to start**: Check Python version (3.10-3.13 supported) and virtual environment
 2. **Frontend build errors**: Ensure Node.js 16+ and clear npm cache
 3. **AI analysis fails**: Verify API keys and environment variables
 4. **Database errors**: Run database initialization script
-5. **Dependency conflicts**: Use conda environment (`mj-estimator`) to avoid conflicts
-6. **RAG service errors**: Ensure sentence-transformers is installed in conda environment
+5. **Dependency conflicts**: Use conda environment or isolated venv
+6. **RAG service errors**: Ensure sentence-transformers is installed properly
+7. **Missing pinecone**: RAG service will run in mock mode if pinecone-client not installed
 
 ### Debug Mode
 Enable debug logging by setting:

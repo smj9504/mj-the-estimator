@@ -128,6 +128,18 @@ def init_database():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_timestamp ON demo_ai_analysis(analysis_timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_demo_ai_analysis_verified ON demo_ai_analysis(is_verified)')
         
+        # Kitchen cabinetry data table for auto-save
+        cursor.execute('''CREATE TABLE IF NOT EXISTS kitchen_cabinetry_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT UNIQUE,
+            kitchen_data TEXT,
+            uploaded_images TEXT,
+            analysis_results TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES pre_estimate_sessions(session_id)
+        )''')
+        
         # Migrate existing tables - add new jobsite columns if they don't exist
         try:
             # Check if old jobsite column exists and new columns don't

@@ -17,13 +17,16 @@ try:
     # Type alias for numpy array when available
     NumpyArray = np.ndarray
 except ImportError as e:
-    print(f"RAG dependencies not available: {e}")
     DEPENDENCIES_AVAILABLE = False
     # Fallback type when numpy is not available
     NumpyArray = Any
     np = None
 
 from utils.logger import logger
+
+# Log dependency status after logger is imported
+if not DEPENDENCIES_AVAILABLE:
+    logger.debug(f"RAG dependencies not available - running in mock mode")
 from models.database import execute_query, execute_insert, execute_update
 
 class RAGService:

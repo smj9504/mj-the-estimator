@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
@@ -1150,3 +1151,249 @@ async def calculate_partial_area(request: AreaCalculationRequest):
         logger.error(f"❌ API: Error calculating area: {e}")
         logger.error(f"🔍 Error type: {type(e).__name__}")
         raise HTTPException(status_code=500, detail=f"Failed to calculate area: {str(e)}")
+
+# Kitchen Cabinetry Auto-save endpoints
+@router.put("/auto-save/kitchen-cabinetry/{session_id}")
+async def auto_save_kitchen_cabinetry(session_id: str, data: dict):
+    """Auto-save kitchen cabinetry data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Extract data
+        kitchen_data = json.dumps(data.get('kitchenData', {}))
+        uploaded_images = json.dumps(data.get('uploadedImages', []))
+        analysis_results = json.dumps(data.get('analysisResults', {}))
+        
+        # Check if kitchen cabinetry data exists
+        existing_data = execute_query(
+            "SELECT * FROM kitchen_cabinetry_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if existing_data:
+            # Update existing data
+            execute_update(
+                """UPDATE kitchen_cabinetry_data 
+                   SET kitchen_data = ?, uploaded_images = ?, analysis_results = ?, 
+                       updated_at = CURRENT_TIMESTAMP 
+                   WHERE session_id = ?""",
+                (kitchen_data, uploaded_images, analysis_results, session_id)
+            )
+        else:
+            # Insert new data
+            execute_insert(
+                """INSERT INTO kitchen_cabinetry_data 
+                   (session_id, kitchen_data, uploaded_images, analysis_results) 
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, kitchen_data, uploaded_images, analysis_results)
+            )
+        
+        return {"success": True, "message": "Kitchen cabinetry auto-saved"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error auto-saving kitchen cabinetry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to auto-save kitchen cabinetry")
+
+@router.get("/auto-save/kitchen-cabinetry/{session_id}")
+async def get_saved_kitchen_cabinetry(session_id: str):
+    """Get saved kitchen cabinetry data"""
+    try:
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get saved data
+        saved_data = execute_query(
+            "SELECT * FROM kitchen_cabinetry_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not saved_data:
+            return {
+                "success": True,
+                "data": {
+                    "kitchenData": {},
+                    "uploadedImages": [],
+                    "analysisResults": {}
+                }
+            }
+        
+        data = saved_data[0]
+        return {
+            "success": True,
+            "data": {
+                "kitchenData": json.loads(data['kitchen_data']) if data['kitchen_data'] else {},
+                "uploadedImages": json.loads(data['uploaded_images']) if data['uploaded_images'] else [],
+                "analysisResults": json.loads(data['analysis_results']) if data['analysis_results'] else {}
+            },
+            "lastSaved": data['updated_at']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting saved kitchen cabinetry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get saved kitchen cabinetry")
+
+@router.post("/auto-save/kitchen-cabinetry/analyze")
+async def analyze_kitchen_images(
+    session_id: str = Form(...),
+    images: list[UploadFile] = File(...)
+):
+    """Analyze kitchen images using AI to extract cabinetry specifications"""
+    try:
+        logger.info(f"Starting kitchen cabinetry analysis for session {session_id}")
+        logger.info(f"Received {len(images)} images for analysis")
+        
+        # Check if session exists
+        sessions = execute_query(
+            "SELECT * FROM pre_estimate_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Process each image
+        analysis_results = []
+        for i, image in enumerate(images):
+            logger.info(f"Processing image {i+1}/{len(images)}: {image.filename}")
+            
+            # Read image data
+            image_data = await image.read()
+            
+            # Basic analysis using AI service for kitchen cabinetry
+            try:
+                # Use a simplified prompt for kitchen cabinetry analysis
+                kitchen_analysis_prompt = """
+                Analyze this kitchen image and provide detailed cabinetry specifications. Focus on:
+                
+                1. Cabinet Layout:
+                   - Kitchen type (galley, L-shaped, U-shaped, island, etc.)
+                   - Overall dimensions estimate
+                   - Configuration details
+                
+                2. Base Cabinets:
+                   - Count cabinets by width (12", 15", 18", 21", 24", 30", 36")
+                   - Special base cabinets (sink base, corner base, etc.)
+                   - Linear feet estimate
+                
+                3. Wall Cabinets:
+                   - Count cabinets by width (12", 15", 18", 24", 30", 36")
+                   - Height (standard 30", 36", 42")
+                   - Linear feet estimate
+                
+                4. Specifications:
+                   - Door style (raised panel, flat panel, shaker, etc.)
+                   - Material type (wood species, laminate, etc.)
+                   - Construction type (frame/frameless)
+                   - Finish/color
+                
+                5. Hardware:
+                   - Handle/knob style
+                   - Finish (brushed nickel, oil-rubbed bronze, etc.)
+                   - Hinge type
+                
+                6. Countertops:
+                   - Material (granite, quartz, laminate, etc.)
+                   - Edge profile
+                   - Estimated square footage
+                
+                7. Backsplash:
+                   - Material and pattern
+                   - Installation pattern
+                   - Estimated square footage
+                
+                Return analysis as structured JSON with confidence scores for each element.
+                """
+                
+                # Convert image to base64 for AI analysis
+                import base64
+                image_base64 = base64.b64encode(image_data).decode('utf-8')
+                
+                # Use AI service to analyze the image
+                ai_analysis = ai_service.analyze_kitchen_image(
+                    image_base64, 
+                    kitchen_analysis_prompt
+                )
+                
+                analysis_results.append({
+                    "image_name": image.filename,
+                    "image_index": i,
+                    "analysis": ai_analysis,
+                    "timestamp": time.time()
+                })
+                
+                logger.info(f"Successfully analyzed image {i+1}: {image.filename}")
+                
+            except Exception as img_error:
+                logger.error(f"Error analyzing image {image.filename}: {img_error}")
+                analysis_results.append({
+                    "image_name": image.filename,
+                    "image_index": i,
+                    "error": str(img_error),
+                    "timestamp": time.time()
+                })
+        
+        # Save analysis results
+        analysis_data = {
+            "session_id": session_id,
+            "total_images": len(images),
+            "successful_analyses": len([r for r in analysis_results if "error" not in r]),
+            "results": analysis_results,
+            "analysis_timestamp": time.time()
+        }
+        
+        # Update kitchen cabinetry data with analysis results
+        existing_data = execute_query(
+            "SELECT * FROM kitchen_cabinetry_data WHERE session_id = ?",
+            (session_id,)
+        )
+        
+        if existing_data:
+            # Update existing data with analysis results
+            current_kitchen_data = json.loads(existing_data[0]['kitchen_data']) if existing_data[0]['kitchen_data'] else {}
+            current_uploaded_images = json.loads(existing_data[0]['uploaded_images']) if existing_data[0]['uploaded_images'] else []
+            
+            execute_update(
+                """UPDATE kitchen_cabinetry_data 
+                   SET analysis_results = ?, updated_at = CURRENT_TIMESTAMP 
+                   WHERE session_id = ?""",
+                (json.dumps(analysis_data), session_id)
+            )
+        else:
+            # Insert new data with analysis results
+            execute_insert(
+                """INSERT INTO kitchen_cabinetry_data 
+                   (session_id, kitchen_data, uploaded_images, analysis_results) 
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, "{}", "[]", json.dumps(analysis_data))
+            )
+        
+        logger.info(f"Kitchen cabinetry analysis completed for session {session_id}")
+        
+        return {
+            "success": True,
+            "message": "Kitchen images analyzed successfully",
+            "data": analysis_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error analyzing kitchen images: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze kitchen images: {str(e)}")

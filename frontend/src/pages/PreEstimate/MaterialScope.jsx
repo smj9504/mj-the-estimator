@@ -36,6 +36,49 @@ const MaterialScope = React.memo(() => {
   // Locations and rooms state
   const [locations, setLocations] = useState([]);
 
+  // Helper function for array handling - memoized (moved up to fix initialization order)
+  const ensureArray = useCallback((value) => {
+    if (Array.isArray(value)) return value;
+    if (value === undefined || value === null || value === '') return [];
+    return [value];
+  }, []);
+
+  // Materials that may need underlayment - memoized to prevent recreation
+  const materialsWithUnderlayment = useMemo(() => ['carpet', 'laminate', 'vinyl', 'engineered hardwood', 'luxury vinyl plank'], []);
+
+  // Helper function to check if material needs underlayment - memoized
+  const needsUnderlayment = useCallback((materialValue) => {
+    if (!materialValue) return false;
+    const lowerMaterial = materialValue.toLowerCase();
+    return materialsWithUnderlayment.some(material => lowerMaterial.includes(material));
+  }, [materialsWithUnderlayment]);
+
+  // Helper functions for multi-material handling - memoized (moved up to fix initialization order)
+  const addMaterialToArray = useCallback((materialArray, newMaterial) => {
+    const array = ensureArray(materialArray);
+    if (newMaterial && !array.includes(newMaterial)) {
+      return [...array, newMaterial];
+    }
+    return array;
+  }, [ensureArray]);
+
+  const removeMaterialFromArray = useCallback((materialArray, materialToRemove) => {
+    const array = ensureArray(materialArray);
+    return array.filter(material => material !== materialToRemove);
+  }, [ensureArray]);
+
+  const updateMaterialInArray = useCallback((materialArray, oldMaterial, newMaterial) => {
+    if (!newMaterial) return ensureArray(materialArray);
+    const array = ensureArray(materialArray);
+    const index = array.indexOf(oldMaterial);
+    if (index !== -1) {
+      const updated = [...array];
+      updated[index] = newMaterial;
+      return updated;
+    }
+    return array;
+  }, [ensureArray]);
+
   // Function to synchronize locations with measurement data while preserving existing settings - memoized
   const synchronizeLocationsWithMeasurementData = useCallback((measurementData, existingLocations) => {
     const syncedLocations = measurementData.map(locationData => {
@@ -285,10 +328,11 @@ const MaterialScope = React.memo(() => {
     };
   }, [sessionId, measurementData, locations]);
 
-  // Setup auto-save
-  const { save: autoSave } = useAutoSave(
-    sessionId ? `material-scope-${sessionId}` : '',
-    sessionId ? async (data) => {
+  // Setup auto-save with useCallback to prevent recreation
+  const autoSaveCallback = useCallback(async (data) => {
+    if (!sessionId) return;
+    
+    try {
       await autoSaveAPI.saveMaterialScope(sessionId, {
         scopeData: data.scopeData,
         roomOpenings: {},  // Add room openings data if needed
@@ -297,15 +341,30 @@ const MaterialScope = React.memo(() => {
       
       // Also save to sessionStorage for backward compatibility
       sessionStorage.setItem(`materialScope_${sessionId}`, JSON.stringify(data.scopeData));
-    } : null,
+    } catch (error) {
+      console.error('Auto-save failed:', error);
+    }
+  }, [sessionId]);
+
+  // Stable status change callback
+  const handleStatusChange = useCallback((status) => {
+    setAutoSaveStatus(status);
+  }, []);
+
+  const { save: autoSave, cleanup: cleanupAutoSave } = useAutoSave(
+    sessionId ? `material-scope-${sessionId}` : '',
+    autoSaveCallback,
     {
       debounceTime: 2000,
       periodicSaveInterval: 30000,
-      onStatusChange: setAutoSaveStatus
+      onStatusChange: handleStatusChange
     }
   );
 
-  // Auto-save when data changes
+  // Auto-save when data changes - removed autoSave from dependencies to prevent infinite loop
+  // and added proper serialization check
+  const lastSavedDataRef = useRef(null);
+  
   useEffect(() => {
     if (sessionId && autoSave && (defaultScope || locations.length > 0)) {
       const materialScopeData = {
@@ -315,9 +374,21 @@ const MaterialScope = React.memo(() => {
         }
       };
       
-      autoSave(materialScopeData);
+      // Only trigger auto-save if data has actually changed
+      const currentDataString = JSON.stringify(materialScopeData);
+      if (lastSavedDataRef.current !== currentDataString) {
+        lastSavedDataRef.current = currentDataString;
+        autoSave(materialScopeData);
+      }
     }
-  }, [sessionId, defaultScope, locations, autoSave]);
+  }, [sessionId, defaultScope, locations]); // Removed autoSave from dependencies
+
+  // Cleanup auto-save on unmount
+  useEffect(() => {
+    return () => {
+      cleanupAutoSave();
+    };
+  }, [cleanupAutoSave]);
 
   // Update locations when they change
   useEffect(() => {
@@ -388,16 +459,6 @@ const MaterialScope = React.memo(() => {
     });
   }, [ensureArray, needsUnderlayment, addMaterialToArray, removeMaterialFromArray, updateMaterialInArray]);
 
-  // Materials that may need underlayment - memoized to prevent recreation
-  const materialsWithUnderlayment = useMemo(() => ['carpet', 'laminate', 'vinyl', 'engineered hardwood', 'luxury vinyl plank'], []);
-
-  // Helper function to check if material needs underlayment - memoized
-  const needsUnderlayment = useCallback((materialValue) => {
-    if (!materialValue) return false;
-    const lowerMaterial = materialValue.toLowerCase();
-    return materialsWithUnderlayment.some(material => lowerMaterial.includes(material));
-  }, [materialsWithUnderlayment]);
-
   // Migration helper functions to convert old single-material format to new array format - memoized
   const migrateToArrayFormat = useCallback((scope) => {
     if (!scope) return defaultScope;
@@ -435,37 +496,6 @@ const MaterialScope = React.memo(() => {
     return migratedObj;
   }, [ensureArray]);
 
-  // Helper functions for multi-material handling - memoized
-  const ensureArray = useCallback((value) => {
-    if (Array.isArray(value)) return value;
-    if (value === undefined || value === null || value === '') return [];
-    return [value];
-  }, []);
-
-  const addMaterialToArray = useCallback((materialArray, newMaterial) => {
-    const array = ensureArray(materialArray);
-    if (newMaterial && !array.includes(newMaterial)) {
-      return [...array, newMaterial];
-    }
-    return array;
-  }, [ensureArray]);
-
-  const removeMaterialFromArray = useCallback((materialArray, materialToRemove) => {
-    const array = ensureArray(materialArray);
-    return array.filter(material => material !== materialToRemove);
-  }, [ensureArray]);
-
-  const updateMaterialInArray = useCallback((materialArray, oldMaterial, newMaterial) => {
-    if (!newMaterial) return ensureArray(materialArray);
-    const array = ensureArray(materialArray);
-    const index = array.indexOf(oldMaterial);
-    if (index !== -1) {
-      const updated = [...array];
-      updated[index] = newMaterial;
-      return updated;
-    }
-    return array;
-  }, [ensureArray]);
 
   const updateRoom = useCallback((locationIndex, roomIndex, field, value, action = 'set') => {
     const newLocations = [...locations];

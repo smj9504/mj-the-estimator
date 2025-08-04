@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 import sqlite3
@@ -26,10 +27,24 @@ from utils.logger import logger
 from middleware.logging_middleware import LoggingRoute, log_request_body
 from utils.prompts import LEGACY_SCOPE_PROMPT
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("MJ The Estimator API starting up", 
+                host=settings.host, 
+                port=settings.port,
+                environment=settings.environment)
+    # Initialize database
+    init_database()
+    yield
+    # Shutdown
+    logger.info("MJ The Estimator API shutting down")
+
 app = FastAPI(
     title="MJ Estimator API", 
     version="1.0.0",
-    route_class=LoggingRoute  # Use custom route class for automatic logging
+    route_class=LoggingRoute,  # Use custom route class for automatic logging
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -49,26 +64,11 @@ app.add_middleware(
 # Add logging middleware
 app.middleware("http")(log_request_body)
 
-# Initialize database
-init_database()
-
 # Include routers
 app.include_router(pre_estimate_router)
 app.include_router(material_analysis_router, prefix="/api")
 app.include_router(demo_analysis_router)
 app.include_router(rag_demo_analysis_router)
-
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    logger.info("MJ The Estimator API starting up", 
-                host=settings.host, 
-                port=settings.port,
-                environment=settings.environment)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("MJ The Estimator API shutting down")
 
 # Legacy code (keeping for backward compatibility)
 try:

@@ -136,10 +136,14 @@ const KitchenCabinetry = React.memo(() => {
 
   // Load existing data
   useEffect(() => {
-    if (sessionId) {
-      loadExistingData();
-    }
-    setLoading(false);
+    const initializeData = async () => {
+      if (sessionId) {
+        await loadExistingData();
+      }
+      setLoading(false);
+    };
+    
+    initializeData();
   }, [sessionId]);
 
   const loadExistingData = useCallback(async () => {
@@ -405,7 +409,7 @@ const KitchenCabinetry = React.memo(() => {
               <p className="text-sm text-gray-500 mb-4">or</p>
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                className="px-4 py-2 bg-blue-600 text-gray-800 rounded-md hover:bg-blue-700 hover:text-gray-100 transition-colors"
               >
                 Browse Files
               </button>
@@ -495,7 +499,7 @@ const KitchenCabinetry = React.memo(() => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Kitchen Type</label>
                   <select
-                    value={kitchenData.layout.kitchenType}
+                    value={kitchenData?.layout?.kitchenType || ''}
                     onChange={(e) => updateKitchenData('layout', 'kitchenType', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                   >
@@ -512,7 +516,7 @@ const KitchenCabinetry = React.memo(() => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Overall Dimensions</label>
                   <input
                     type="text"
-                    value={kitchenData.layout.dimensions}
+                    value={kitchenData?.layout?.dimensions || ''}
                     onChange={(e) => updateKitchenData('layout', 'dimensions', e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md"
                     placeholder="e.g., 12' x 14'"
@@ -522,7 +526,7 @@ const KitchenCabinetry = React.memo(() => {
                   <input
                     type="checkbox"
                     id="hasIsland"
-                    checked={kitchenData.layout.hasIsland}
+                    checked={kitchenData?.layout?.hasIsland || false}
                     onChange={(e) => updateKitchenData('layout', 'hasIsland', e.target.checked)}
                     className="rounded"
                   />
@@ -700,7 +704,7 @@ const KitchenCabinetry = React.memo(() => {
           </button>
           <button
             onClick={handleComplete}
-            className="px-6 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 shadow-md"
+            className="px-6 py-2 bg-green-600 text-green-50 rounded-lg font-medium hover:bg-green-700 hover:text-green-100 shadow-md"
           >
             Complete Kitchen Cabinetry →
           </button>

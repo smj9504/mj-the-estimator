@@ -55,7 +55,7 @@ class AIService:
         
         # PRIORITY 3: Development environment - try Ollama
         if os.getenv('OLLAMA_HOST') or self._check_ollama_available():
-            logger.info("OpenAI not available - falling back to Ollama for development")
+            logger.info("Development environment: Using Ollama as AI provider")
             self._init_ollama()
             return
         
@@ -1501,6 +1501,125 @@ class OpenAIService:
         )
         
         return formatted_prompt
+    
+    def analyze_kitchen_image(self, base64_image: str, prompt: str) -> Dict[str, Any]:
+        """Analyze kitchen image to extract cabinetry specifications"""
+        try:
+            logger.info("Starting kitchen cabinetry image analysis")
+            
+            if self.mock_mode:
+                logger.info("Using mock mode for kitchen analysis")
+                return {
+                    "layout": {
+                        "kitchen_type": "L-shaped",
+                        "dimensions": "12' x 10'",
+                        "has_island": False,
+                        "configuration": "Standard galley layout"
+                    },
+                    "base_cabinets": {
+                        "cabinet_24": 3,
+                        "cabinet_30": 2,
+                        "cabinet_36": 1,
+                        "sink_base": 1,
+                        "corner_base": 1,
+                        "linear_feet": 18
+                    },
+                    "wall_cabinets": {
+                        "cabinet_24": 4,
+                        "cabinet_30": 3,
+                        "cabinet_36": 2,
+                        "linear_feet": 16
+                    },
+                    "specifications": {
+                        "door_style": "Shaker",
+                        "material_type": "Painted MDF",
+                        "construction": "Frame",
+                        "finish": "White",
+                        "quality_tier": "Mid-range"
+                    },
+                    "hardware": {
+                        "style": "Bar pulls",
+                        "finish": "Brushed nickel",
+                        "hinge_type": "Soft-close"
+                    },
+                    "countertops": {
+                        "material": "Quartz",
+                        "edge_profile": "Straight",
+                        "estimated_sf": 45
+                    },
+                    "backsplash": {
+                        "material": "Subway tile",
+                        "pattern": "Running bond",
+                        "estimated_sf": 25
+                    },
+                    "confidence_scores": {
+                        "layout": 0.85,
+                        "base_cabinets": 0.80,
+                        "wall_cabinets": 0.75,
+                        "specifications": 0.70,
+                        "hardware": 0.65,
+                        "countertops": 0.90,
+                        "backsplash": 0.85
+                    }
+                }
+            
+            # Use OpenAI Vision API for analysis
+            if self.ai_provider == 'openai' and self.llm:
+                logger.info("Using OpenAI Vision for kitchen analysis")
+                
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    }
+                ]
+                
+                response = self.llm.chat.completions.create(
+                    model=self.models['vision'],
+                    messages=messages,
+                    max_tokens=2000,
+                    temperature=0.1
+                )
+                
+                analysis_text = response.choices[0].message.content
+                logger.info("OpenAI Vision analysis completed")
+                
+                # Try to parse JSON response
+                try:
+                    analysis_json = json.loads(analysis_text)
+                    return analysis_json
+                except json.JSONDecodeError:
+                    # If not valid JSON, return structured response
+                    return {
+                        "raw_analysis": analysis_text,
+                        "note": "Analysis returned as text, not structured JSON"
+                    }
+            
+            else:
+                logger.warning("Kitchen image analysis requires OpenAI Vision API")
+                return {
+                    "error": "Kitchen image analysis requires OpenAI Vision API",
+                    "raw_analysis": "No analysis available - OpenAI Vision API not configured"
+                }
+                
+        except Exception as e:
+            logger.error(f"Kitchen image analysis failed: {e}")
+            return {
+                "error": str(e),
+                "analysis_failed": True
+            }
 
 # Global AI service instance
 ai_service = AIService()
