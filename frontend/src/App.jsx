@@ -4,6 +4,7 @@ import MeasurementData from './pages/PreEstimate/MeasurementData'
 import MaterialScope from './pages/PreEstimate/MaterialScope'
 import DemoScope from './pages/PreEstimate/DemoScope'
 import WorkScope from './pages/PreEstimate/WorkScope'
+import KitchenCabinetry from './pages/PreEstimate/KitchenCabinetry'
 import CreateProject from './pages/CreateProject'
 import ProjectManagement from './pages/ProjectManagement'
 import Dashboard from './pages/Dashboard'
@@ -32,6 +33,7 @@ function App() {
           <Route path="/pre-estimate/material-scope" element={<MaterialScope />} />
           <Route path="/pre-estimate/demo-scope" element={<DemoScope />} />
           <Route path="/pre-estimate/work-scope" element={<WorkScope />} />
+          <Route path="/pre-estimate/kitchen-cabinetry" element={<KitchenCabinetry />} />
           
           {/* Main estimate screen (placeholder) */}
           <Route path="/main-estimate" element={

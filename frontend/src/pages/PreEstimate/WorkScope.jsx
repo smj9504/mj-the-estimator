@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { autoSaveManager } from '../../utils/autoSave';
 
 const WorkScope = () => {
   const [searchParams] = useSearchParams();
@@ -15,6 +16,9 @@ const WorkScope = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [error, setError] = useState(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
+  const [showKitchenDialog, setShowKitchenDialog] = useState(false);
+  const [kitchenCabinetryEnabled, setKitchenCabinetryEnabled] = useState(false);
 
   // Default work scope state
   const [defaultWorkScope, setDefaultWorkScope] = useState({
@@ -28,12 +32,63 @@ const WorkScope = () => {
     }
   });
 
+  // Hidden items state (per room)
+  const [hiddenItems, setHiddenItems] = useState({});
+
+  // Custom work scope categories
+  const [customCategories, setCustomCategories] = useState([]);
+
   // Locations and rooms state
   const [locations, setLocations] = useState([]);
+
+  // Setup auto-save
+  useEffect(() => {
+    if (sessionId) {
+      autoSaveManager.register(
+        `workScope_${sessionId}`,
+        async (data) => {
+          // Save to sessionStorage (could be replaced with API call later)
+          sessionStorage.setItem(`workScope_${sessionId}`, JSON.stringify(data));
+          console.log('Work scope auto-saved');
+        },
+        {
+          debounceTime: 2000,
+          periodicSaveInterval: 30000,
+          onStatusChange: setAutoSaveStatus
+        }
+      );
+    }
+
+    return () => {
+      if (sessionId) {
+        autoSaveManager.unregister(`workScope_${sessionId}`);
+      }
+    };
+  }, [sessionId]);
+
+  // Trigger auto-save when data changes
+  useEffect(() => {
+    if (!loading && locations.length > 0 && sessionId) {
+      const workScopeData = {
+        default_scope: defaultWorkScope,
+        locations: locations,
+        material_scope: materialScopeData,
+        demo_scope: demoScopeData,
+        customCategories: customCategories,
+        hiddenItems: hiddenItems
+      };
+      
+      autoSaveManager.save(`workScope_${sessionId}`, workScopeData);
+    }
+  }, [sessionId, defaultWorkScope, locations, materialScopeData, demoScopeData, customCategories, hiddenItems, loading]);
 
   // Load all required data from session storage
   useEffect(() => {
     if (sessionId) {
+      // Check kitchen cabinetry status
+      const kitchenEnabled = sessionStorage.getItem('kitchenCabinetryEnabled');
+      setKitchenCabinetryEnabled(kitchenEnabled === 'true');
+      
       // Load measurement data
       const storedMeasurementData = sessionStorage.getItem(`measurementData_${sessionId}`);
       // Load material scope data
@@ -66,6 +121,16 @@ const WorkScope = () => {
             const existingLocations = parsedWorkScope.locations || [];
             setLocations(existingLocations);
             
+            // Load custom categories if they exist
+            if (parsedWorkScope.customCategories) {
+              setCustomCategories(parsedWorkScope.customCategories);
+            }
+            
+            // Load hidden items state if it exists
+            if (parsedWorkScope.hiddenItems) {
+              setHiddenItems(parsedWorkScope.hiddenItems);
+            }
+            
             // Auto-select first room if available
             if (existingLocations.length > 0 && existingLocations[0].rooms.length > 0) {
               setSelectedRoom({
@@ -87,6 +152,7 @@ const WorkScope = () => {
                   protection: [""],
                   detach_reset: [""],
                   cleaning: [""],
+                  installation: [""],
                   note: ""
                 }
               })) || []
@@ -178,6 +244,9 @@ const WorkScope = () => {
 
   const addArrayItem = (locationIndex, roomIndex, arrayField) => {
     const newLocations = [...locations];
+    if (!newLocations[locationIndex].rooms[roomIndex].work_scope[arrayField]) {
+      newLocations[locationIndex].rooms[roomIndex].work_scope[arrayField] = [];
+    }
     newLocations[locationIndex].rooms[roomIndex].work_scope[arrayField].push("");
     setLocations(newLocations);
   };
@@ -215,7 +284,9 @@ const WorkScope = () => {
       default_scope: defaultWorkScope,
       locations: locations,
       material_scope: materialScopeData,
-      demo_scope: demoScopeData
+      demo_scope: demoScopeData,
+      customCategories: customCategories,
+      hiddenItems: hiddenItems
     };
     
     sessionStorage.setItem(`workScope_${sessionId}`, JSON.stringify(workScopeData));
@@ -268,6 +339,23 @@ const WorkScope = () => {
       completionStatus.workScope = true;
       sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
       
+      // If kitchen cabinetry is enabled, go directly to kitchen cabinetry page
+      if (kitchenCabinetryEnabled) {
+        navigate(`/pre-estimate/kitchen-cabinetry?session=${sessionId}`);
+      } else {
+        // Show Kitchen Cabinetry dialog
+        setShowKitchenDialog(true);
+      }
+    }
+  };
+
+  const handleKitchenDialogResponse = (includeKitchen) => {
+    setShowKitchenDialog(false);
+    
+    if (includeKitchen) {
+      // Navigate to Kitchen Cabinetry page
+      navigate(`/pre-estimate/kitchen-cabinetry?session=${sessionId}`);
+    } else {
       // Navigate back to dashboard
       navigate(`/dashboard/${sessionId}`);
     }
@@ -334,8 +422,35 @@ const WorkScope = () => {
                 Configure work scope for each room
               </p>
             </div>
-            <div className="text-sm text-gray-500">
-              Session: {sessionId?.slice(-8)}
+            <div className="flex items-center space-x-4">
+              {autoSaveStatus === 'saving' && (
+                <div className="text-sm text-gray-600 flex items-center">
+                  <svg className="animate-spin h-4 w-4 mr-1 text-gray-600" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  저장 중...
+                </div>
+              )}
+              {autoSaveStatus === 'saved' && (
+                <div className="text-sm text-green-600 flex items-center">
+                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  자동 저장됨
+                </div>
+              )}
+              {autoSaveStatus === 'error' && (
+                <div className="text-sm text-red-600 flex items-center">
+                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  저장 실패
+                </div>
+              )}
+              <div className="text-sm text-gray-500">
+                Session: {sessionId?.slice(-8)}
+              </div>
             </div>
           </div>
         </div>
@@ -431,7 +546,7 @@ const WorkScope = () => {
                           input.value = '';
                         }
                       }}
-                      className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+                      className="px-4 py-2 bg-blue-600 text-gray-900 text-sm rounded-md hover:bg-blue-700"
                     >
                       Add
                     </button>
@@ -548,39 +663,227 @@ const WorkScope = () => {
                     </div>
                   )}
 
-                  {/* Additional Work Items - Always shown */}
-                  {selectedRoom.room?.work_scope && ['protection', 'detach_reset', 'cleaning'].map((arrayField) => (
-                    <div key={arrayField}>
-                      <div className="flex justify-between items-center mb-2">
-                        <label className="block text-sm font-medium text-gray-700 capitalize">
-                          {arrayField.replace('_', ' ')}
-                        </label>
+                  {/* Additional Work Items - With hide/show functionality */}
+                  {selectedRoom.room?.work_scope && (
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="text-base font-medium text-gray-900">Additional Work Items</h4>
                         <button
-                          onClick={() => addArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField)}
-                          className="px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700"
+                          onClick={() => {
+                            const roomKey = `${selectedRoom.locationIndex}-${selectedRoom.roomIndex}`;
+                            const allHidden = hiddenItems[roomKey] && Object.keys(hiddenItems[roomKey]).length === 4;
+                            if (allHidden) {
+                              setHiddenItems(prev => ({ ...prev, [roomKey]: {} }));
+                            } else {
+                              setHiddenItems(prev => ({
+                                ...prev,
+                                [roomKey]: {
+                                  protection: true,
+                                  detach_reset: true,
+                                  cleaning: true,
+                                  installation: true
+                                }
+                              }));
+                            }
+                          }}
+                          className="text-sm text-blue-600 hover:text-blue-800"
                         >
-                          Add
+                          {hiddenItems[`${selectedRoom.locationIndex}-${selectedRoom.roomIndex}`] && 
+                           Object.keys(hiddenItems[`${selectedRoom.locationIndex}-${selectedRoom.roomIndex}`]).length === 4 
+                            ? 'Show All' : 'Hide All'}
                         </button>
                       </div>
-                      {selectedRoom.room.work_scope[arrayField]?.map((item, itemIndex) => (
-                        <div key={`${arrayField}-${itemIndex}-${Date.now()}`} className="flex gap-2 mb-2">
+                      
+                      {['protection', 'detach_reset', 'cleaning', 'installation'].map((arrayField) => {
+                        const roomKey = `${selectedRoom.locationIndex}-${selectedRoom.roomIndex}`;
+                        const isHidden = hiddenItems[roomKey]?.[arrayField];
+                        
+                        return (
+                          <div key={arrayField} className={`${isHidden ? 'opacity-50' : ''}`}>
+                            <div className="flex justify-between items-center mb-2">
+                              <label className="block text-sm font-medium text-gray-700 capitalize">
+                                {arrayField.replace('_', ' ')}
+                              </label>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    setHiddenItems(prev => ({
+                                      ...prev,
+                                      [roomKey]: {
+                                        ...prev[roomKey],
+                                        [arrayField]: !isHidden
+                                      }
+                                    }));
+                                  }}
+                                  className="text-sm text-gray-600 hover:text-gray-800"
+                                >
+                                  {isHidden ? 'Show' : 'Hide'}
+                                </button>
+                                {!isHidden && (
+                                  <button
+                                    onClick={() => addArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField)}
+                                    className="px-3 py-1 bg-green-600 text-gray-900 text-sm rounded-md hover:bg-green-700"
+                                  >
+                                    Add
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {!isHidden && (selectedRoom.room.work_scope[arrayField]?.map((item, itemIndex) => (
+                              <div key={`${arrayField}-${itemIndex}`} className="flex gap-2 mb-2">
+                                <input
+                                  type="text"
+                                  value={item}
+                                  onChange={(e) => updateArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField, itemIndex, e.target.value)}
+                                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                                  placeholder={`${arrayField.replace('_', ' ')} item`}
+                                />
+                                <button
+                                  onClick={() => removeArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField, itemIndex)}
+                                  className="text-sm text-red-600 hover:text-red-800 px-3 py-2"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            )) || [])}
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Custom Categories */}
+                      {customCategories.map((category) => {
+                        const roomKey = `${selectedRoom.locationIndex}-${selectedRoom.roomIndex}`;
+                        const isHidden = hiddenItems[roomKey]?.[category];
+                        
+                        return (
+                          <div key={category} className={`${isHidden ? 'opacity-50' : ''}`}>
+                            <div className="flex justify-between items-center mb-2">
+                              <label className="block text-sm font-medium text-gray-700 capitalize">
+                                {category.replace('_', ' ')}
+                              </label>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    setHiddenItems(prev => ({
+                                      ...prev,
+                                      [roomKey]: {
+                                        ...prev[roomKey],
+                                        [category]: !isHidden
+                                      }
+                                    }));
+                                  }}
+                                  className="text-sm text-gray-600 hover:text-gray-800"
+                                >
+                                  {isHidden ? 'Show' : 'Hide'}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setCustomCategories(prev => prev.filter(cat => cat !== category));
+                                    // Remove from all rooms
+                                    const newLocations = [...locations];
+                                    newLocations.forEach(location => {
+                                      location.rooms.forEach(room => {
+                                        if (room.work_scope && room.work_scope[category]) {
+                                          delete room.work_scope[category];
+                                        }
+                                      });
+                                    });
+                                    setLocations(newLocations);
+                                  }}
+                                  className="text-sm text-red-600 hover:text-red-800"
+                                >
+                                  Delete Category
+                                </button>
+                                {!isHidden && (
+                                  <button
+                                    onClick={() => addArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, category)}
+                                    className="px-3 py-1 bg-green-600 text-gray-900 text-sm rounded-md hover:bg-green-700"
+                                  >
+                                    Add
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {!isHidden && (selectedRoom.room.work_scope[category]?.map((item, itemIndex) => (
+                              <div key={`${category}-${itemIndex}`} className="flex gap-2 mb-2">
+                                <input
+                                  type="text"
+                                  value={item}
+                                  onChange={(e) => updateArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, category, itemIndex, e.target.value)}
+                                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                                  placeholder={`${category.replace('_', ' ')} item`}
+                                />
+                                <button
+                                  onClick={() => removeArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, category, itemIndex)}
+                                  className="text-sm text-red-600 hover:text-red-800 px-3 py-2"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            )) || [])}
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Add Custom Category */}
+                      <div className="pt-4 border-t border-gray-200">
+                        <h5 className="text-sm font-medium text-gray-700 mb-3">Add Custom Category</h5>
+                        <div className="flex gap-2">
                           <input
                             type="text"
-                            value={item}
-                            onChange={(e) => updateArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField, itemIndex, e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
-                            placeholder={`${arrayField.replace('_', ' ')} item`}
+                            placeholder="Category name (e.g., electrical, plumbing)"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && e.target.value.trim()) {
+                                const newCategory = e.target.value.trim().toLowerCase().replace(/ /g, '_');
+                                if (!customCategories.includes(newCategory) && 
+                                    !['protection', 'detach_reset', 'cleaning', 'installation'].includes(newCategory)) {
+                                  setCustomCategories(prev => [...prev, newCategory]);
+                                  // Initialize the category for all rooms
+                                  const newLocations = [...locations];
+                                  newLocations.forEach(location => {
+                                    location.rooms.forEach(room => {
+                                      if (room.work_scope && !room.work_scope[newCategory]) {
+                                        room.work_scope[newCategory] = [""];
+                                      }
+                                    });
+                                  });
+                                  setLocations(newLocations);
+                                  e.target.value = '';
+                                }
+                              }
+                            }}
                           />
                           <button
-                            onClick={() => removeArrayItem(selectedRoom.locationIndex, selectedRoom.roomIndex, arrayField, itemIndex)}
-                            className="text-sm text-red-600 hover:text-red-800 px-3 py-2"
+                            onClick={(e) => {
+                              const input = e.target.previousElementSibling;
+                              if (input.value.trim()) {
+                                const newCategory = input.value.trim().toLowerCase().replace(/ /g, '_');
+                                if (!customCategories.includes(newCategory) && 
+                                    !['protection', 'detach_reset', 'cleaning', 'installation'].includes(newCategory)) {
+                                  setCustomCategories(prev => [...prev, newCategory]);
+                                  // Initialize the category for all rooms
+                                  const newLocations = [...locations];
+                                  newLocations.forEach(location => {
+                                    location.rooms.forEach(room => {
+                                      if (room.work_scope && !room.work_scope[newCategory]) {
+                                        room.work_scope[newCategory] = [""];
+                                      }
+                                    });
+                                  });
+                                  setLocations(newLocations);
+                                  input.value = '';
+                                }
+                              }
+                            }}
+                            className="px-4 py-2 bg-blue-600 text-gray-900 text-sm rounded-md hover:bg-blue-700"
                           >
-                            Remove
+                            Add Category
                           </button>
                         </div>
-                      )) || []}
+                      </div>
                     </div>
-                  ))}
+                  )}
 
                   {/* Note */}
                   <div>
@@ -648,8 +951,68 @@ const WorkScope = () => {
                 onClick={handleNext}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 shadow-md"
               >
-                Complete Work Scope
+{kitchenCabinetryEnabled ? 'Continue to Kitchen Cabinetry' : 'Complete Work Scope'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Kitchen Cabinetry Dialog */}
+        {showKitchenDialog && (
+          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+              <div className="p-6">
+                <div className="flex items-center justify-center mb-4">
+                  <div className="bg-blue-100 rounded-full p-3">
+                    <svg className="w-12 h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                    </svg>
+                  </div>
+                </div>
+                
+                <h3 className="text-lg font-semibold text-gray-900 text-center mb-2">
+                  Kitchen Cabinetry Scope
+                </h3>
+                
+                <p className="text-gray-600 text-center mb-6">
+                  이 프로젝트에 Kitchen Cabinetry 작업이 포함되어 있습니까?
+                </p>
+                
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
+                  <p className="text-sm text-blue-800">
+                    Kitchen Cabinetry를 포함하면:
+                  </p>
+                  <ul className="mt-2 space-y-1 text-sm text-blue-700">
+                    <li className="flex items-start">
+                      <span className="mr-2">•</span>
+                      <span>여러 장의 주방 사진을 업로드할 수 있습니다</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="mr-2">•</span>
+                      <span>AI가 캐비닛 종류와 사양을 자동으로 분석합니다</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="mr-2">•</span>
+                      <span>나중에 언제든지 롤백할 수 있습니다</span>
+                    </li>
+                  </ul>
+                </div>
+                
+                <div className="flex space-x-3">
+                  <button
+                    onClick={() => handleKitchenDialogResponse(false)}
+                    className="flex-1 px-4 py-2 border-2 border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    아니요, 건너뛰기
+                  </button>
+                  <button
+                    onClick={() => handleKitchenDialogResponse(true)}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                  >
+                    네, 포함하기
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

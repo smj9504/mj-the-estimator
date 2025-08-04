@@ -13,6 +13,22 @@ const Dashboard = () => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editProjectName, setEditProjectName] = useState('');
   const [estimates, setEstimates] = useState([]);
+  const [showKitchenCabinetry, setShowKitchenCabinetry] = useState(false);
+
+  // Load Kitchen Cabinetry visibility state
+  useEffect(() => {
+    const kitchenCabinetryEnabled = sessionStorage.getItem(`kitchenCabinetryEnabled_${sessionId}`);
+    if (kitchenCabinetryEnabled === 'true') {
+      setShowKitchenCabinetry(true);
+    }
+  }, [sessionId]);
+
+  // Reload estimates when Kitchen Cabinetry visibility changes
+  useEffect(() => {
+    if (sessionId) {
+      loadEstimates();
+    }
+  }, [showKitchenCabinetry]);
 
   useEffect(() => {
     if (sessionId) {
@@ -96,6 +112,28 @@ const Dashboard = () => {
         console.log('Dashboard: Could not check material scope from API');
       }
       
+      // Check if demo scope exists in database and has meaningful data
+      let hasDemoScope = false;
+      try {
+        const savedDemoScope = await autoSaveAPI.getDemoScope(sessionId);
+        hasDemoScope = savedDemoScope.success && 
+                       savedDemoScope.demoScopeData && 
+                       Object.keys(savedDemoScope.demoScopeData).length > 0;
+      } catch (demoScopeError) {
+        console.log('Dashboard: Could not check demo scope from API');
+      }
+      
+      // Check if kitchen cabinetry exists in database and has meaningful data
+      let hasKitchenCabinetry = false;
+      try {
+        const savedKitchenCabinetry = await autoSaveAPI.getKitchenCabinetry?.(sessionId);
+        hasKitchenCabinetry = savedKitchenCabinetry?.success && 
+                             savedKitchenCabinetry?.kitchenCabinetryData && 
+                             Object.keys(savedKitchenCabinetry.kitchenCabinetryData).length > 0;
+      } catch (kitchenCabinetryError) {
+        console.log('Dashboard: Could not check kitchen cabinetry from API');
+      }
+      
       preEstimateSteps = [
         { 
           name: 'Measurement Data', 
@@ -114,7 +152,7 @@ const Dashboard = () => {
         },
         { 
           name: 'Demo Scope', 
-          completed: completionStatus.demoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
+          completed: completionStatus.demoScope || hasDemoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
           path: '/pre-estimate/demo-scope' 
         },
         { 
@@ -123,6 +161,15 @@ const Dashboard = () => {
           path: '/pre-estimate/work-scope' 
         }
       ];
+      
+      // Add Kitchen Cabinetry only if enabled
+      if (showKitchenCabinetry) {
+        preEstimateSteps.push({ 
+          name: 'Kitchen Cabinetry', 
+          completed: completionStatus.kitchenCabinetry || hasKitchenCabinetry || !!sessionStorage.getItem(`kitchenCabinetry_${sessionId}`), 
+          path: '/pre-estimate/kitchen-cabinetry'
+        });
+      }
     } catch (error) {
       console.error('Error loading saved progress:', error);
       
@@ -166,6 +213,28 @@ const Dashboard = () => {
         console.log('Dashboard fallback: Could not check material scope from API');
       }
       
+      // Check demo scope existence in fallback
+      let hasDemoScope = false;
+      try {
+        const savedDemoScope = await autoSaveAPI.getDemoScope(sessionId);
+        hasDemoScope = savedDemoScope.success && 
+                       savedDemoScope.demoScopeData && 
+                       Object.keys(savedDemoScope.demoScopeData).length > 0;
+      } catch (demoScopeError) {
+        console.log('Dashboard fallback: Could not check demo scope from API');
+      }
+      
+      // Check kitchen cabinetry existence in fallback
+      let hasKitchenCabinetry = false;
+      try {
+        const savedKitchenCabinetry = await autoSaveAPI.getKitchenCabinetry?.(sessionId);
+        hasKitchenCabinetry = savedKitchenCabinetry?.success && 
+                             savedKitchenCabinetry?.kitchenCabinetryData && 
+                             Object.keys(savedKitchenCabinetry.kitchenCabinetryData).length > 0;
+      } catch (kitchenCabinetryError) {
+        console.log('Dashboard fallback: Could not check kitchen cabinetry from API');
+      }
+      
       preEstimateSteps = [
         { 
           name: 'Measurement Data', 
@@ -184,7 +253,7 @@ const Dashboard = () => {
         },
         { 
           name: 'Demo Scope', 
-          completed: completionStatus.demoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
+          completed: completionStatus.demoScope || hasDemoScope || !!sessionStorage.getItem(`demoScope_${sessionId}`), 
           path: '/pre-estimate/demo-scope' 
         },
         { 
@@ -193,6 +262,15 @@ const Dashboard = () => {
           path: '/pre-estimate/work-scope' 
         }
       ];
+      
+      // Add Kitchen Cabinetry only if enabled
+      if (showKitchenCabinetry) {
+        preEstimateSteps.push({ 
+          name: 'Kitchen Cabinetry', 
+          completed: completionStatus.kitchenCabinetry || hasKitchenCabinetry || !!sessionStorage.getItem(`kitchenCabinetry_${sessionId}`), 
+          path: '/pre-estimate/kitchen-cabinetry'
+        });
+      }
     }
 
     const completedSteps = preEstimateSteps.filter(step => step.completed).length;
@@ -226,6 +304,15 @@ const Dashboard = () => {
   };
 
   const handleEstimateClick = (estimate, step) => {
+    // Kitchen Cabinetry는 Work Scope 완료 후에만 접근 가능
+    if (step.requiresWorkScope) {
+      const workScopeStep = estimate.steps.find(s => s.name === 'Work Scope');
+      if (!workScopeStep?.completed) {
+        alert('Work Scope를 먼저 완료해주세요.');
+        return;
+      }
+    }
+    
     // sessionId를 URL 파라미터로 전달
     const pathWithSession = `${step.path}?session=${sessionId}`;
     navigate(pathWithSession);
@@ -506,31 +593,74 @@ const Dashboard = () => {
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
-                          {estimate.steps.map((step, index) => (
-                            <div key={step.name} className="flex items-center">
-                              <div className="flex flex-col items-center cursor-pointer" onClick={() => handleEstimateClick(estimate, step)}>
-                                <div className={`
-                                  w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium mb-2
-                                  ${step.completed 
-                                    ? 'bg-green-100 border-2 border-green-500' 
-                                    : 'bg-gray-100 border-2 border-gray-300'}
-                                  hover:bg-opacity-80 transition-colors
-                                `}>
-                                  {getStepStatusIcon(step.completed)}
+                          {estimate.steps.map((step, index) => {
+                            // Kitchen Cabinetry 단계는 항상 접근 가능
+                            const isKitchenCabinetryDisabled = false;
+                              
+                            return (
+                              <div key={step.name} className="flex items-center">
+                                <div className={`flex flex-col items-center ${isKitchenCabinetryDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`} 
+                                     onClick={() => handleEstimateClick(estimate, step)}>
+                                  <div className={`
+                                    w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium mb-2
+                                    ${step.completed 
+                                      ? 'bg-green-100 border-2 border-green-500' 
+                                      : isKitchenCabinetryDisabled
+                                        ? 'bg-gray-50 border-2 border-gray-200 opacity-50'
+                                        : 'bg-gray-100 border-2 border-gray-300'}
+                                    ${!isKitchenCabinetryDisabled && 'hover:bg-opacity-80'} transition-colors
+                                  `}>
+                                    {getStepStatusIcon(step.completed)}
+                                  </div>
+                                  <span className={`text-xs font-medium text-center max-w-20 ${
+                                    step.completed 
+                                      ? 'text-green-600' 
+                                      : isKitchenCabinetryDisabled
+                                        ? 'text-gray-400'
+                                        : 'text-gray-500'
+                                  }`}>
+                                    {step.name}
+                                  </span>
                                 </div>
-                                <span className={`text-xs font-medium text-center max-w-20 ${
-                                  step.completed ? 'text-green-600' : 'text-gray-500'
-                                }`}>
-                                  {step.name}
-                                </span>
+                                {index < estimate.steps.length - 1 && (
+                                  <div className={`flex-1 h-0.5 mx-4 ${
+                                    step.completed ? 'bg-green-500' : 'bg-gray-200'
+                                  }`} />
+                                )}
                               </div>
-                              {index < estimate.steps.length - 1 && (
-                                <div className={`flex-1 h-0.5 mx-4 ${
-                                  step.completed ? 'bg-green-500' : 'bg-gray-200'
-                                }`} />
-                              )}
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Kitchen Cabinetry Toggle */}
+                      <div className="mb-4 pb-4 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-gray-700">옵션</span>
+                          <button
+                            onClick={() => {
+                              const newState = !showKitchenCabinetry;
+                              setShowKitchenCabinetry(newState);
+                              sessionStorage.setItem(`kitchenCabinetryEnabled_${sessionId}`, newState.toString());
+                            }}
+                            className={`px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                              showKitchenCabinetry
+                                ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" 
+                                  d={showKitchenCabinetry 
+                                    ? "M5 13l4 4L19 7" 
+                                    : "M12 6v6m0 0v6m0-6h6m-6 0H6"
+                                  } 
+                                />
+                              </svg>
+                              <span>Kitchen Cabinetry {showKitchenCabinetry ? '포함됨' : '추가하기'}</span>
                             </div>
-                          ))}
+                          </button>
                         </div>
                       </div>
 
@@ -543,6 +673,33 @@ const Dashboard = () => {
                         >
                           계속 작업
                         </button>
+                        
+                        {/* Kitchen Cabinetry 바로가기 버튼 (Kitchen Cabinetry가 활성화된 경우에만 표시) */}
+                        {(() => {
+                          const kitchenCabinetryStep = estimate.steps.find(s => s.name === 'Kitchen Cabinetry');
+                          
+                          if (showKitchenCabinetry && kitchenCabinetryStep) {
+                            return (
+                              <button
+                                onClick={() => navigate(`/pre-estimate/kitchen-cabinetry?session=${sessionId}`)}
+                                className={`px-4 py-2 text-black text-sm rounded-md transition-colors border flex items-center space-x-2 ${
+                                  kitchenCabinetryStep.completed 
+                                    ? 'bg-green-600 hover:bg-green-700 border-green-600'
+                                    : 'bg-purple-600 hover:bg-purple-700 border-purple-600'
+                                }`}
+                                style={{ color: 'black' }}
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5a2 2 0 012-2h4a2 2 0 012 2v2H8V5z" />
+                                </svg>
+                                <span>Kitchen Cabinetry {kitchenCabinetryStep.completed ? '(완료됨)' : ''}</span>
+                              </button>
+                            );
+                          }
+                          return null;
+                        })()}
+                        
                         {estimate.demolitionScopeReady && (
                           <button
                             onClick={handleDownloadDemolitionJSON}
@@ -568,6 +725,42 @@ const Dashboard = () => {
                           </button>
                         )}
                       </div>
+                      
+                      {/* 롤백 기능 - Kitchen Cabinetry가 완료된 경우에만 표시 */}
+                      {(() => {
+                        const kitchenCabinetryCompleted = estimate.steps.find(s => s.name === 'Kitchen Cabinetry')?.completed;
+                        
+                        if (kitchenCabinetryCompleted) {
+                          return (
+                            <div className="flex items-center space-x-3 pt-3 mt-3 border-t border-gray-100">
+                              <span className="text-sm text-gray-600">롤백 옵션:</span>
+                              <button
+                                onClick={() => {
+                                  if (confirm('Kitchen Cabinetry 데이터를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+                                    // Kitchen Cabinetry 데이터 삭제
+                                    sessionStorage.removeItem(`kitchenCabinetry_${sessionId}`);
+                                    
+                                    // completionStatus에서 kitchenCabinetry 플래그 제거
+                                    const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
+                                    delete completionStatus.kitchenCabinetry;
+                                    sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
+                                    
+                                    // 페이지 새로고침하여 상태 업데이트
+                                    window.location.reload();
+                                  }
+                                }}
+                                className="px-3 py-1 bg-red-100 text-red-700 text-xs rounded-md hover:bg-red-200 transition-colors border border-red-200 flex items-center space-x-1"
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                                </svg>
+                                <span>Kitchen Cabinetry 초기화</span>
+                              </button>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   </div>
                 ))}

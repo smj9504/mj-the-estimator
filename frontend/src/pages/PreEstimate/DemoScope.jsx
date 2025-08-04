@@ -386,12 +386,20 @@ const DemoScope = React.memo(() => {
     };
     
     setDemoedScope(prev => {
-      const newScope = { ...prev };
-      if (!newScope[locationName]) newScope[locationName] = [];
+      // Deep clone to ensure React detects changes
+      const newScope = JSON.parse(JSON.stringify(prev));
+      
+      if (!newScope[locationName]) {
+        newScope[locationName] = [];
+      }
+      
       if (!newScope[locationName][roomIndex]) {
-        console.log('❌ Room not found:', locationName, roomIndex);
-        setIsAddingSurface(false); // Reset flag on error
-        return prev;
+        console.log('❌ Room not found at index:', locationName, roomIndex);
+        console.log('Current scope:', newScope);
+        // Initialize the room if it doesn't exist
+        newScope[locationName][roomIndex] = {
+          surfaces: []
+        };
       }
       
       if (!newScope[locationName][roomIndex].surfaces) {
@@ -406,8 +414,10 @@ const DemoScope = React.memo(() => {
         return prev;
       }
       
+      // Add the new surface
       newScope[locationName][roomIndex].surfaces.push(newSurface);
       console.log('✅ Surface added:', surfaceId, 'Total surfaces:', newScope[locationName][roomIndex].surfaces.length);
+      console.log('Updated scope:', newScope);
       
       // Reset flag after successful addition
       setTimeout(() => {
@@ -509,7 +519,8 @@ const DemoScope = React.memo(() => {
     });
   }, []);
 
-  const calculatePartialArea = useCallback(async (description, surfaceType, roomMeasurements, surfaceId) => {
+  // Define calculatePartialArea first
+  const calculatePartialArea = useCallback(async (description, surfaceType, roomMeasurements, surfaceId, locationName, roomIndex) => {
     try {
       // Set loading state for this surface
       if (surfaceId) {
@@ -554,8 +565,12 @@ const DemoScope = React.memo(() => {
 
       const result = await response.json();
       
-      if (result.success) {
-        return result.calculated_area > 0 ? result.calculated_area : 0;
+      if (result.success && result.calculated_area > 0) {
+        // Update the surface with calculated area if locationName and roomIndex are provided
+        if (locationName !== undefined && roomIndex !== undefined && surfaceId) {
+          updateDemoedSurface(locationName, roomIndex, surfaceId, 'partial_area', result.calculated_area);
+        }
+        return result.calculated_area;
       } else {
         return 0;
       }
@@ -573,7 +588,22 @@ const DemoScope = React.memo(() => {
         });
       }
     }
-  }, []);
+  }, [updateDemoedSurface]);
+
+  // Handle AI calculation for partial area
+  const handleAICalculatePartialArea = useCallback(async (locationName, roomIndex, surfaceId) => {
+    const surface = demoedScope[locationName]?.[roomIndex]?.surfaces?.find(s => s.id === surfaceId);
+    if (!surface || !surface.partial_description) return;
+
+    await calculatePartialArea(
+      surface.partial_description,
+      surface.type,
+      selectedRoom.room.measurements,
+      surfaceId,
+      locationName,
+      roomIndex
+    );
+  }, [demoedScope, selectedRoom]);
 
   // Memoized demo scope form - moved outside JSX to fix hooks order
   const demoScopeForm = useMemo(() => {
@@ -581,10 +611,8 @@ const DemoScope = React.memo(() => {
     
     const locationName = selectedRoom.location;
     const roomIndex = selectedRoom.roomIndex;
-    const currentDemoedRoom = demoedScope[locationName]?.[roomIndex];
+    const currentDemoedRoom = demoedScope[locationName]?.[roomIndex] || { surfaces: [] };
     // availableMaterials is now directly available from useMemo
-    
-    if (!currentDemoedRoom) return <div>No demo scope data available</div>;
 
     // Calculate area comparison for visual display
     const areaComparison = calculateAreaComparison(selectedRoom.room, currentDemoedRoom.surfaces || []);
@@ -923,21 +951,58 @@ const DemoScope = React.memo(() => {
 
                     if (method === 'partial') {
                       return (
-                        <div className="mt-2">
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Partial Area ({surfaceUnit})
-                          </label>
-                          <div className="flex items-center space-x-2">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={surface.partial_area || ''}
-                              onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'partial_area', parseFloat(e.target.value) || 0)}
-                              className="w-32 p-2 border border-gray-300 rounded-md"
-                              placeholder="0.00"
-                            />
-                            <span className="text-sm text-gray-600">{surfaceUnit}</span>
+                        <div className="mt-2 space-y-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Describe the demolished area
+                            </label>
+                            <div className="flex items-start space-x-2">
+                              <textarea
+                                value={surface.partial_description || ''}
+                                onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'partial_description', e.target.value)}
+                                className="flex-1 p-2 border border-gray-300 rounded-md"
+                                rows="2"
+                                placeholder="e.g., Lower 4 feet of wall tiles removed, 30% of floor area near entrance..."
+                              />
+                              <button
+                                onClick={() => handleAICalculatePartialArea(locationName, roomIndex, surface.id)}
+                                disabled={!surface.partial_description || aiCalcLoading[surface.id]}
+                                className="px-3 py-2 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center whitespace-nowrap"
+                              >
+                                {aiCalcLoading[surface.id] ? (
+                                  <>
+                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Calculating...
+                                  </>
+                                ) : (
+                                  '🤖 AI Calculate'
+                                )}
+                              </button>
+                            </div>
+                            {!surface.partial_description && (
+                              <p className="text-xs text-gray-500 mt-1">Enter a description first to enable AI calculation</p>
+                            )}
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Calculated Area ({surfaceUnit})
+                            </label>
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={surface.partial_area || ''}
+                                onChange={(e) => updateDemoedSurface(locationName, roomIndex, surface.id, 'partial_area', parseFloat(e.target.value) || 0)}
+                                className="w-32 p-2 border border-gray-300 rounded-md"
+                                placeholder="0.00"
+                              />
+                              <span className="text-sm text-gray-600">{surfaceUnit}</span>
+                            </div>
                           </div>
                         </div>
                       );
@@ -1053,7 +1118,7 @@ const DemoScope = React.memo(() => {
         )}
       </div>
     );
-  }, [selectedRoom, demoedScope, availableMaterials, addDemoedSurface, updateDemoedSurface, removeDemoedSurface, getCurrentRoomMaterialData, getMaterialForSurfaceType, getSurfaceDisplayUnit, calculatePartialArea, surfaceTypeCategories, getDescriptionPlaceholder, calculateAreaComparison, getMaterialsForSurface, isCountBasedSurfaceType]);
+  }, [selectedRoom, demoedScope, availableMaterials, addDemoedSurface, updateDemoedSurface, removeDemoedSurface, getCurrentRoomMaterialData, getMaterialForSurfaceType, getSurfaceDisplayUnit, calculatePartialArea, handleAICalculatePartialArea, surfaceTypeCategories, getDescriptionPlaceholder, calculateAreaComparison, getMaterialsForSurface, isCountBasedSurfaceType, aiCalcLoading]);
 
   const loadData = async () => {
     // Load measurement data from sessionStorage first, then database
@@ -1147,11 +1212,28 @@ const DemoScope = React.memo(() => {
           
           // Auto-select first room
           if (parsedMeasurementData.length > 0 && parsedMeasurementData[0].rooms.length > 0) {
+            const firstLocation = parsedMeasurementData[0].location;
+            const firstRoom = parsedMeasurementData[0].rooms[0];
+            
             setSelectedRoom({
-              location: parsedMeasurementData[0].location,
+              location: firstLocation,
               locationIndex: 0,
-              room: parsedMeasurementData[0].rooms[0],
+              room: firstRoom,
               roomIndex: 0
+            });
+            
+            // Initialize demoedScope for the first room
+            setDemoedScope(prev => {
+              const newScope = { ...prev };
+              if (!newScope[firstLocation]) {
+                newScope[firstLocation] = [];
+              }
+              if (!newScope[firstLocation][0]) {
+                newScope[firstLocation][0] = {
+                  surfaces: []
+                };
+              }
+              return newScope;
             });
           }
         } catch (error) {
@@ -1166,6 +1248,20 @@ const DemoScope = React.memo(() => {
       locationIndex,
       room,
       roomIndex
+    });
+    
+    // Initialize demoedScope for this room if it doesn't exist
+    setDemoedScope(prev => {
+      const newScope = { ...prev };
+      if (!newScope[location]) {
+        newScope[location] = [];
+      }
+      if (!newScope[location][roomIndex]) {
+        newScope[location][roomIndex] = {
+          surfaces: []
+        };
+      }
+      return newScope;
     });
   }, []);
 
@@ -1283,6 +1379,16 @@ const DemoScope = React.memo(() => {
     const completionStatus = JSON.parse(sessionStorage.getItem(`completionStatus_${sessionId}`) || '{}');
     completionStatus.demoScope = true;
     sessionStorage.setItem(`completionStatus_${sessionId}`, JSON.stringify(completionStatus));
+    
+    // Save completion status to database
+    try {
+      await autoSaveAPI.saveProgress(sessionId, {
+        stepStatuses: completionStatus
+      });
+    } catch (error) {
+      console.error('Failed to save completion status to database:', error);
+      // Continue anyway - sessionStorage will still work
+    }
     
     // Navigate to work scope
     navigate(`/pre-estimate/work-scope?session=${sessionId}`);

@@ -221,6 +221,56 @@ export const autoSaveAPI = {
     }
     
     return response.json();
+  },
+
+  // Save kitchen cabinetry data
+  async saveKitchenCabinetry(sessionId, data) {
+    const response = await fetch(`${API_BASE}/kitchen-cabinetry/${sessionId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to save kitchen cabinetry');
+    }
+    
+    return response.json();
+  },
+
+  // Get saved kitchen cabinetry data
+  async getKitchenCabinetry(sessionId) {
+    const response = await fetch(`${API_BASE}/kitchen-cabinetry/${sessionId}`);
+    
+    if (!response.ok) {
+      throw new Error('Failed to get saved kitchen cabinetry');
+    }
+    
+    return response.json();
+  },
+
+  // Analyze kitchen images with AI
+  async analyzeKitchenImages(sessionId, images) {
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    
+    // Add images to FormData
+    images.forEach((image, index) => {
+      if (image.file) {
+        formData.append(`images`, image.file);
+      }
+    });
+    
+    const response = await fetch(`${API_BASE}/kitchen-cabinetry/analyze`, {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to analyze kitchen images');
+    }
+    
+    return response.json();
   }
 };
 
